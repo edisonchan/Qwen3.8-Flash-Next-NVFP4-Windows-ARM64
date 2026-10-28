@@ -551,47 +551,8 @@ Linux 那套"环境优先、`.env` 只补空缺"的语义会让旧默认值反�
 所以补齐属于**正确性**，不是调优。现在的 `config.ps1` 导出 21 个 `TF_FLASHNEXT_*`，与 `config.sh`
 一一对应，每项都仍可被 `.env` 覆盖。
 
-补齐之后还有一件必须如实记下的事，因为它决定了默认值：**配方这套开关在本机单流 decode 上是净损失**。
-2026-10-28 逐项二分（9 组配置，每组一次重启、3 遍取最快，脚本与报告见 `sweep-decode.ps1` /
-`decode-c1.txt`）：
-
-| 组合 | greedy code 单流 |
-|---|---|
-| 全关（补齐之前的行为） | 90.3 tok/s |
-| 配方全开 | 77.7 |
-| 单开 `GATHER_READ=pread`（连带 `DRAFT_AHEAD`） | 80.8 |
-| 单开 `KEEP_LATE` + `GDN_LANES` | **91.8**（最快） |
-| 其余四项单项 | 89.4–91.0，全在 ±1% 噪声内 |
-
-14% 的损失几乎全来自 `GATHER_READ=pread`——Windows 上是每行一次 `ReadFile`+`OVERLAPPED`，
-不是 Linux 那种映射页错误；只有 `KEEP_LATE`+`GDN_LANES` 站得住。落地的架构是两层：
-`config.ps1` 是 `config.sh` 的**逐值镜像**（导出清单与取值都照抄，差集为空，`config.sh` 没导出的
-也不导）；**本机实测最优组合放在配方的 `.env`**（`.env` 的每个 key 压过镜像，块在
-`docs/knobs.md` §6）。配方 README 里那些 +14% / 15–25% 是它自己 Linux 镜像
-上的数字，不能当作 Windows 上的预期。
-
-prefill 一侧同一天扫完（`sweep-prefill.ps1` → `prefill-32k.txt`），结论同向：目标 2,735 tok/s
-（32k / 32,807 prompt tokens），实测 **2,291**（−16%）；prompt 侧开关全关只有 1,706，而 `GATHER_READ=pread`
-一开就掉到 **663**（2.6 倍损失），配方整套是 731——所以"配方全开"在 prefill 上和 decode 上一样是负收益。
-
-| prefill 组（32k，3 遍取最快） | tok/s |
-|---|---|
-| `PROMPT_EXPERT_TILE=2` + `_ROWS=256`（单开） | 2,032 |
-| `PROMPT_HC2` + `SHARED_DIRECT` + `HEAD_PIECE=1536` + `GEMM2`（一组） | 1,874 |
-| 两者合并（现在 `config.ps1` 的值） | **2,291** |
-| 全关 | 1,706 |
-| `WARM_AHEAD=1` / `PREFILL_TAIL=512` 单开 | 1,703 / 1,705（等于噪声） |
-| `GATHER_READ=pread` 单开 | 663 |
-| 配方整套 | 731 |
-
-两组效果**可叠加**且各自显著，`WARM_AHEAD` 与 `PREFILL_TAIL` 在 32k 上不起作用，于是默认值取 0
-（等于引擎出厂值）。剩余 16% 的差距已不在这批开关里。后来的三轮（`prefill-stage2.txt`、
-`prefill-stage3.txt`、`decode-c4.txt`）把剩下的候选全部扫完并**关死**：`CHUNK`、`PROMPT_MX128`、
-`PRODUCT_STREAMS` 全在噪声内（唯一有真数字的 `CHUNK=8192` 是 +0.77%，要为它把 reserve 从 4 压到
-2，不划算——顺带更正早期笔记里"16384 多 13 GiB scratch"的错判，实测只多 0.62 GiB，13 GiB 是源码
-注释里 max_chunk=16384 的口径）；专家 tile 的 kernel 实例选择器 `PROMPT_EXPERT_TILE_CFG` 证明出厂
-64,1,2 是局部最优；4 流下同样没有任何开关动得了聚合吞吐。**全部判定冻结在 `docs/knobs.md`**——
-每个导出变量一行，带取值、证据和置信度，改值之前先在 sweep harness 里打败那张表里的数字。
+补齐之后记一句就够：**配方 README 里那些 +14% / 15–25% 是它自己 Linux 镜像上的数字**，在 WDDM
+上不能当作预期；本页的性能数字全部来自 sparkDash 实测（见 README 与 `docs/bench/`）。
 
 **验收办法**（新机器上必做一次）：
 

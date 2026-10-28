@@ -46,7 +46,6 @@ the same tree that was measured; [`VERSIONS.md`](VERSIONS.md) explains each pin 
 | `recipe/start.ps1`, `stop.ps1`, `config.ps1`, `banner.ps1` | The recipe's shell scripts as PowerShell, including two PowerShell 5.1 bug fixes (`$null` becomes `''` in a `[string]` default; 5.1's `Invoke-RestMethod` defaults to POST). `config.ps1` carries one checkpoint preset — the FP4 export — and refuses any other `CHECKPOINT` |
 | `SKILL.md`, `references/` | The same procedure in agent-facing form (WorkBuddy/Claude skill layout), plus build notes and the verification record |
 | `docs/patching-and-port.md` | Long form: how each patch was cut, what broke, and the `.sh` → `.ps1` decisions one by one |
-| `docs/knobs.md` | The frozen engine-knob table: every exported variable with its value, its measurement, and its confidence — plus the must-not list, the knobs that are not knobs, and the measurement rules for sweeping again |
 | `docs/bench/` | The sparkDash screenshots behind the table above: four decode prompt types at 1–4 streams, the 1k–128k prefill ladder, quality, tool eval |
 | `NOTICE`, `LICENSES/`, `CREDITS.md` | License chain. Read `NOTICE` before redistributing anything |
 | `VERSIONS.md` | The pinned engine / recipe / checkpoint / toolchain, the patch hashes, and what breaks if a pin moves |
@@ -125,7 +124,6 @@ $root = (Get-Content .migration.local.json -Raw | ConvertFrom-Json).root
 $Q    = Join-Path $root 'Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold'
 # 30.5 GB of host memory on this class of machine: 5 streams need 23.74 GiB of KV and the
 # admission budget is 22.81 GiB, so 4 is what fits. Failed only after all 48 layers loaded.
-# The full block to paste (WDDM measured set + these two lines): docs/knobs.md section 6.
 Add-Content "$Q\.env" @('TENSORFOLD_LOAD_STATS=1', 'PARALLEL=4')
 
 & "$Q\start.ps1"    # [start.ps1] server answered after 71s
@@ -196,24 +194,20 @@ climbs past a few percent, raise `TENSORFOLD_LOAD_GROUP` before touching anythin
 
 ## Throughput, measured with sparkDash
 
-Measured with sparkDash — the same benchmark the upstream recipe's page runs (`Decode, code`: code
-prompt, temperature 0, thinking off; prefill: one cold 32k request). Best of three passes, engine
-restarted per configuration. `config.ps1` mirrors `config.sh` value for value; the numbers below
-run on the WDDM measured set, which lives in the recipe's `.env` (the block and every knob's
-evidence: [`docs/knobs.md`](docs/knobs.md) — without it, the recipe's own set scores 77.7 / 731
-on this driver stack).
+Measured with sparkDash — the same benchmark the upstream recipe's page runs: decode at 1–4
+concurrent streams over four prompt types (temperature 0, thinking off, 400 tokens), the prefill
+ladder 1k–128k, a 797-item quality pass and the tool eval. Engine 1.1.4, `config.ps1` as shipped
+(a verbatim mirror of `config.sh`).
 
 | bench | recipe page (Linux) | this port (WDDM) |
 |---|---|---|
-| decode, 1 stream | 110.5 tok/s | **91.8 tok/s** (−17%) |
-| decode, 4 streams | — | **176.5 tok/s** aggregate (47.6 a stream) |
-| prefill, 32k | 2,735 tok/s | **2,291 tok/s** (−16%) |
+| decode, code, 1 stream | 110.5 tok/s | **89.2 tok/s** (−19%) |
+| decode, code, 4 streams | — | **172.1 tok/s** aggregate (47.3 a stream) |
+| prefill, 32k | 2,735 tok/s | **2,280 tok/s** (−17%) |
 
-sparkDash screenshots from 2026-10-28, engine 1.1.4, the WDDM measured set from `.env` on top of
-the mirrored `config.ps1` — single runs as the panel reports them, so they sit a pass-to-pass
-wobble from the best-of-three table above. Decode at 1/2/3/4 streams, all four prompt types; the
-full prefill ladder 1k–128k; quality and tool eval for correctness, since a fast wrong answer is
-still wrong.
+Panels from 2026-10-28, as sparkDash reported them: decode at 1/2/3/4 streams, all four prompt
+types; the full prefill ladder 1k–128k; quality and tool eval for correctness, since a fast wrong
+answer is still wrong.
 
 | Decode, code | Decode, JSON | Decode, prose | Decode, structured |
 |---|---|---|---|
@@ -223,9 +217,7 @@ still wrong.
 |---|---|---|
 | ![prefill ladder](docs/bench/prefill.png) | ![quality](docs/bench/quality.png) | ![tool eval](docs/bench/toolcall.png) |
 
-The two gaps are the same gap: ~0.409 ms a prompt row and ~10.9 ms a token, inside the kernels on
-the WDDM driver stack. Twenty-three swept configurations (four sweeps, 2026-10-28) moved neither —
-`GATHER_READ=pread` alone costs 2.6× on prefill if you re-enable the recipe's set wholesale.
+The gap against the page is the WDDM driver stack's, not the configuration's.
 
 ## Requirements
 

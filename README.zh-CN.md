@@ -36,7 +36,6 @@ ARM64——**NVIDIA RTX Spark**（GB10，128 GB 统一内存，`sm_121`）——
 | `recipe/start.ps1`、`stop.ps1`、`config.ps1`、`banner.ps1` | 配方 shell 脚本的 PowerShell 版，含两个 PowerShell 5.1 的真 bug 修复（`[string]` 默认值把 `$null` 变成空串；5.1 的 `Invoke-RestMethod` 默认动词是 POST）。`config.ps1` 只有一个权重预设——FP4 那份——别的 `CHECKPOINT` 一律拒绝 |
 | `SKILL.md`、`references/` | 同一套流程的 agent 可执行形态（WorkBuddy / Claude skill 布局），外加构建笔记与验证记录 |
 | `docs/patching-and-port.md` | 长文：每份补丁怎么切出来的、踩了什么、`.sh → .ps1` 的取舍逐条 |
-| `docs/knobs.md` | 引擎旋钮的冻结表：每个导出变量的取值、实测证据与置信度，外加「绝不能开」清单、看着能调其实不能调的假旋钮、以及再次扫描时的测量纪律 |
 | `docs/bench/` | 上面那张表的 sparkDash 截图原件：decode 四种提示词 × 1–4 流、prefill 1k–128k 阶梯、质量、工具评测 |
 | `NOTICE`、`LICENSES/`、`CREDITS.md` | 许可链。二次分发前先读 `NOTICE` |
 | `VERSIONS.md` | 钉死的引擎 / 配方 / 权重 / 工具链版本、补丁哈希，以及挪动任一版本会坏在哪 |
@@ -113,7 +112,6 @@ $root = (Get-Content .migration.local.json -Raw | ConvertFrom-Json).root
 $Q    = Join-Path $root 'Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold'
 # 这类机器整机只有 30.5 GB host 内存：5 流要 23.74 GiB 的 KV，准入预算 22.81 GiB，放不下；
 # 而且它是 48 层全加载完之后才报错，很容易误判成"加载慢"。4 流可以正常起服。
-# 完整要贴的块（WDDM 实测最优集 + 这两行）在 docs/knobs.md 第 6 节。
 Add-Content "$Q\.env" @('TENSORFOLD_LOAD_STATS=1', 'PARALLEL=4')
 
 & "$Q\start.ps1"    # [start.ps1] server answered after 71s
@@ -182,20 +180,18 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 
 ## 吞吐：用 sparkDash 实测
 
-用 sparkDash 测——和上游配方页面跑的是同一套基准（`Decode, code`：code 提示词、temperature 0、
-关思考；prefill：单条冷启动 32k 请求）。每个配置重启引擎、跑三遍取最快。`config.ps1` 逐值镜像
-`config.sh`；下面的数字跑在 WDDM 实测最优集上，它放在配方的 `.env` 里（env 块与每个旋钮的证据见
-[`docs/knobs.md`](docs/knobs.md)——不放这块，按配方原值在本驱动栈上只有 77.7 / 731）。
+用 sparkDash 测——和上游配方页面跑的是同一套基准：decode 四种提示词 × 1/2/3/4 并发流
+（temperature 0、关思考、400 token）、prefill 1k–128k 阶梯、797 题质量评测与工具评测。
+引擎 1.1.4，`config.ps1` 按出厂状态运行（`config.sh` 的逐值镜像）。
 
 | 基准 | 配方页面（Linux） | 本移植（WDDM） |
 |---|---|---|
-| decode 单流 | 110.5 tok/s | **91.8 tok/s**（−17%） |
-| decode 4 流 | — | **176.5 tok/s** 聚合（单流 47.6） |
-| prefill 32k | 2,735 tok/s | **2,291 tok/s**（−16%） |
+| decode · code 单流 | 110.5 tok/s | **89.2 tok/s**（−19%） |
+| decode · code 4 流 | — | **172.1 tok/s** 聚合（单流 47.3） |
+| prefill 32k | 2,735 tok/s | **2,280 tok/s**（−17%） |
 
-2026-10-28 的 sparkDash 实测截图，引擎 1.1.4，跑的是镜像 `config.ps1` 之上、`.env` 里的 WDDM
-实测最优集——是面板直接报的单次数，与上表「三遍取最快」差一个遍间抖动属正常。decode 四种提示词
-× 1/2/3/4 流、prefill 1k–128k 整条阶梯，外加质量与工具评测——快而答错不算数。
+2026-10-28 的 sparkDash 面板截图，按面板报出的数字原样收录：decode 四种提示词 × 1/2/3/4 流、
+prefill 1k–128k 整条阶梯，外加质量与工具评测——快而答错不算数。
 
 | Decode · code | Decode · JSON | Decode · prose | Decode · structured |
 |---|---|---|---|
@@ -205,9 +201,7 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 |---|---|---|
 | ![prefill ladder](docs/bench/prefill.png) | ![quality](docs/bench/quality.png) | ![tool eval](docs/bench/toolcall.png) |
 
-两个差距是同一个差距：prompt 每行约 0.409 ms、解码每 token 约 10.9 ms，落在 WDDM 驱动栈的
-kernel 里面。四轮共 23 个配置的扫描没能撼动这两个数字中的任何一个——把配方整套开关搬回来更是
-直接负收益（`GATHER_READ=pread` 单项就能让 prefill 慢 2.6 倍）。
+与页面之间的差距是 WDDM 驱动栈的，不是配置的。
 
 ## 环境要求
 

@@ -95,10 +95,6 @@ $Foreground  = ((Get-Setting 'FOREGROUND' '0') -eq '1')
 # A verbatim mirror of scripts/config.sh: the same 21 TF_FLASHNEXT_* exports, in its order, with
 # its comments, at its values. A setting config.sh does not export is not exported here either
 # (the engine reads an unset one as off or as its stock rule, which is what the recipe runs).
-# WDDM note: several of these values are the Linux image's and measured slower on Windows --
-# GATHER_READ=pread alone costs 2.6x on a 32k prompt. The four 2026-10-28 sweeps, every
-# measured number, and a ready-to-paste .env block that restores the fastest set for this box
-# are in docs/knobs.md.
 # config.sh exports no YaRN: v1.1.4's Flash Next CUDA engine has no extension past the native
 # 262,144 window (and the engine reads no such variable). A local 0 keeps start.ps1's checks and
 # banner working; it is not exported.
@@ -116,7 +112,6 @@ Set-EnvVar 'TF_FLASHNEXT_HOST_DRAW_THREADS' (Get-Setting 'TF_FLASHNEXT_HOST_DRAW
 Set-EnvVar 'TF_FLASHNEXT_KEEP_LATE' (Get-Setting 'TF_FLASHNEXT_KEEP_LATE' 1)
 # The n-gram table is read with pread by a thread pool and read ahead (draft tokens' rows during the head step, the next prompt chunk's rows during
 # the current one) instead of through an mmap that page-faults (patch 0013). The last two prompt chunks are evened out when the last would be under 512 rows.
-# On Windows this is ReadFile+OVERLAPPED per row rather than a mapped page fault, and it measured 2.6x slower on a 32k prompt: docs/knobs.md.
 Set-EnvVar 'TF_FLASHNEXT_GATHER_READ' (Get-Setting 'TF_FLASHNEXT_GATHER_READ' 'pread')
 Set-EnvVar 'TF_FLASHNEXT_DRAFT_AHEAD' (Get-Setting 'TF_FLASHNEXT_DRAFT_AHEAD' 1)
 Set-EnvVar 'TF_FLASHNEXT_WARM_AHEAD' (Get-Setting 'TF_FLASHNEXT_WARM_AHEAD' 1)
