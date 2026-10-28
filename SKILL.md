@@ -680,8 +680,28 @@ info: flashnext: layer 47 took 1170 ms
     prefill 一侧同一天也扫完了（32k，目标 2,735 tok/s）：两组 prompt 开关可叠加，`PROMPT_EXPERT_TILE=2`
     + `_ROWS=256` 单开 2,032、`PROMPT_HC2`+`SHARED_DIRECT`+`HEAD_PIECE=1536`+`GEMM2` 一组 1,874，
     合并 **2,291**，全关 1,706；而 `GATHER_READ=pread` 单开只有 **663**（2.6 倍损失，配方整套 731）。
-    `WARM_AHEAD` 与 `PREFILL_TAIL` 在 32k 上是噪声，默认取 0。剩下 16% 的候选在
-    `TF_FLASHNEXT_CHUNK`（3072 行/次，上限 16384、多 13 GiB scratch）、`PROMPT_MX128`、`PRODUCT_STREAMS`。
+    `WARM_AHEAD` 与 `PREFILL_TAIL` 在 32k 上是噪声，默认取 0。同一天第二轮四阶段扫描
+    （`prefill-stage2.txt`）把**开关层彻底关死**了：`CHUNK`、`PROMPT_MX128`、`PRODUCT_STREAMS`
+    三组四次运行全在 2,280–2,284 之间，极差 0.19%，一个都没过 0.6% 晋级门槛；第一轮的 2,291 与
+    这轮的 2,283 是同一个数测了两遍。唯一有真数字的是 `CHUNK=8192`（2,300.7，+0.77%，
+    约 1 个 MDD），但它要把 `TENSORFOLD_MEMORY_RESERVE_GIB` 从 4 压到 2 才装得下，不值得，未采用。
+    剩下的 16% 在**每行成本**：本机 0.409 ms/行，页面 12.16 s 首 token 反推约 0.34 ms/行，
+    差 21% 全在 prompt GEMM kernel 里面。第三轮（`prefill-stage3.txt`）去扫"选哪个已编译 kernel 实例"：
+    `PROMPT_EXPERT_TILE_CFG="pairs,gu,down"`，结果出厂值 64,1,2 是**局部最优**而不是没测过的默认——
+    pairs=32 −1.5%、pairs=128 −2.4%、down=rt4_s3 −0.7%、gu 三阶段 = 0，四项三个更差。
+    **三个看着像旋钮其实不是的坑**（都是源码里核实的，别再去扫）：
+    `PROMPT_EXPERT_TILE_ROWS` 是"多少行以上的 chunk 才走 tile kernel"的阈值（默认 1024，我们的 chunk 全部过线）；
+    `PROMPT_MX128` 同理是列阈值；`HEAD_PIECE` 在 `forwardHeadPieces` 里被 `min(piece, max(piece_rows, chunk/2))`
+    夹住，CHUNK=3072 时上限正好是 config.sh 给的 1536——只有 CHUNK=8192（上限 4096）才成为杠杆。
+    结论：env 层到 0.409 ms/行 为止，再往下只能靠 kernel profile（nsys --stats），不要重启再扫。
+    第四轮（`sweep-decode4.ps1` → `decode-c4.txt`）在 **4 流**上重测了同一套：聚合 176.5 tok/s
+    对同一次加载里的单流 90.6（1.95×，线性度的 49%），没有任何跨流开关动得了它——
+    `BATCH_HEADS=0`、`SHARED_SIDE=1` 每一遍都低于漂移校正后锚点的每一遍（真损失），
+    `PRODUCT_STREAMS` 2/4/5、`GATHER_EARLY`、`CONFIDENCE=0.4` 全落在 base 一簇里。
+    **4 流的测量纪律跟 1 流不同**：一次运行的三遍散布 2.4–8.1%，而且整机在一次会话里漂了约 9%
+    （ps4 测过 177.7，八分钟后同一份 .env 只有 161.2）——低于约 5% 的差别在这个流数上根本分辨不出来，
+    候选之间必须插 A-B-A 锚点，否则会晋级漂移。全部判定冻结在 `docs/knobs.md`（每个导出变量一行：
+    取值/证据/置信度），改任何值之前先在那张表里打败对应数字。
     顺带一提：`TF_FLASHNEXT_DEPTH` **不是**引擎变量（引擎只有 `TF_FLASHNEXT_DEPTH_LOG`），
     真正控制 draft 长度的是 `TF_FLASHNEXT_DRAFTS`——写了错的变量名不会有任何报错，只会静默不生效。
 

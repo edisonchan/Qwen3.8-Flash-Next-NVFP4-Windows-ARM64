@@ -103,13 +103,32 @@ $Foreground  = ((Get-Setting 'FOREGROUND' '0') -eq '1')
 # nine combinations tried). So what ships here is the fastest set for WDDM, not the recipe's set.
 # config.sh's own figures (+14% greedy code at one stream, 15-25% a prompt call) are its Linux
 # image's and do not transfer. The prompt path was swept the same day (prefill-32k.txt): 2,291
-# tok/s at 32k with the set below, 1,706 with every prompt switch off, 663 with pread on. Still
-# unmeasured here: PRODUCT_STREAMS (5, config.sh's value; the engine's stock is 2).
+# tok/s at 32k with the set below, 1,706 with every prompt switch off, 663 with pread on.
+# A second round (prefill-stage2.txt, four phases) then closed the switch layer: CHUNK,
+# PROMPT_MX128 and PRODUCT_STREAMS are all flat -- 2,280 to 2,284 over four runs, a 0.19%
+# spread, nothing past the 0.6% promotion gate. CHUNK is the only axis with a real number on
+# it (8192 = 2,300.7, +0.77%) and it needs the memory reserve walked 10 -> 2 to load, so it is
+# not shipped either. The remaining 16% is per-row GEMM cost: 0.409 ms a row here against
+# ~0.34 for the page's 12.16 s first token, which is inside the kernels, not in front of them.
+# A third round then varied the expert tile's own knobs (PROMPT_EXPERT_TILE_CFG =
+# "pairs,gu,down", which picks a COMPILED KERNEL INSTANCE): the shipped 64,1,2 is a local
+# optimum, not an untested default -- pairs 32 cost 1.5%, 128 cost 2.4%, down rt4_s3 cost
+# 0.7%, and gu at 3 pipeline stages was 0. So the tile is load-bearing and already tuned.
+# A fourth round measured this same set at FOUR streams (sweep-decode4.ps1 -> decode-c4.txt):
+# 176.5 tok/s aggregate against 90.6 at one, in the same load -- 1.95x, 49% of linear -- and no
+# cross-stream switch moved it. BATCH_HEADS=0 and SHARED_SIDE=1 fell below every pass of the
+# drift-corrected anchor (so the stock batched heads stay on, the side stream stays off);
+# PRODUCT_STREAMS at 2/4/5, GATHER_EARLY and CONFIDENCE=0.4 all sat inside the base cluster, so
+# the recipe's 5 and the stock 0.6 stand. Read four-stream margins loosely: one run's three
+# passes spread 2-8% there and the box itself drifted ~9% across the session, so nothing under
+# ~5% is resolvable at this stream count. docs/knobs.md is the frozen table: every exported
+# variable with its evidence and confidence, one row each, nothing left "probably the default".
 $Yarn = [int](Get-Setting 'TF_FLASHNEXT_YARN' $(if ($Context -gt 262144) { 4 } else { 0 }))
 Set-EnvVar 'TF_FLASHNEXT_YARN' $Yarn
 # MTP: up to 6 drafts a round (also the engine default; spelled out because config.sh does).
 Set-EnvVar 'TF_FLASHNEXT_DRAFTS' (Get-Setting 'TF_FLASHNEXT_DRAFTS' 6)
-# config.sh ships 5, the engine's stock is 2, and this port has not bisected it either way.
+# config.sh ships 5 and the engine's stock is 2; bisected on the prompt path, 2 gave 2,281
+# against this 5's 2,283, i.e. noise. Keeping the recipe's value costs nothing measurable.
 Set-EnvVar 'TF_FLASHNEXT_PRODUCT_STREAMS' (Get-Setting 'TF_FLASHNEXT_PRODUCT_STREAMS' 5)
 # Off: the batched sampled draft, the GPU candidate pick, the pooled n-gram gather and the
 # worker-thread draws (patches 0007/0008/0011) were 1.0-1.7 tok/s on WDDM, inside the noise floor
