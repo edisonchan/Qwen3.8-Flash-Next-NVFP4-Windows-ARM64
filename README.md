@@ -6,12 +6,7 @@ to Windows 11 on ARM64 — an **NVIDIA RTX Spark** (GB10, 128 GB unified, `sm_12
 with MSVC for ARM64, PowerShell scripts that replace the recipe's shell scripts, and a fix that takes model loading
 from **257 s to 71 s**.
 
-> **Hardware, precisely.** The upstream recipe targets **DGX Spark**, which ships NVIDIA's Linux-based DGX OS.
-> This port targets the same GB10 Grace Blackwell module running **Windows 11 ARM64**, where it is sold and
-> identified as **RTX Spark** (128 GB unified memory, 20 cores, 48 SMs at `sm_121`). Everything here is specific to
-> that combination: MSVC/ARM64 instead of gcc, PowerShell instead of bash, WDDM instead of the Linux driver, and no
-> container. The recipe's own directory name still says `Single-DGX-Spark` because it is the name of the upstream
-> repository, not of the machine this runs on.
+> **Hardware.** Windows 11 ARM64 + NVIDIA RTX Spark (GB10, 128 GB unified, `sm_121`) only.
 
 [中文说明](README.zh-CN.md)
 
@@ -202,8 +197,7 @@ climbs past a few percent, raise `TENSORFOLD_LOAD_GROUP` before touching anythin
 `sm_121`) · CUDA 13.4 · Zig 0.17.0 (aarch64-windows) · MSVC 2022 Build Tools with the ARM64 host · PowerShell 5.1 ·
 Python 3.13 arm64 for `--vision` only.
 
-Not DGX Spark: that is the same GB10 module under NVIDIA's Linux DGX OS. Nothing here runs on Linux, and the
-recipe's Linux path (Docker image, bash, `/proc`) is exactly what this port replaces.
+Not DGX Spark: same GB10, different OS and driver stack, and nothing here runs on Linux.
 
 No path is fixed: `scripts\migration.config.ps1` finds these, and `.migration.local.json` remembers what you
 accepted. `1-preflight.ps1` hard-fails on zig ≠ 0.17.0 and warns when nvcc is not 13.4.
@@ -265,9 +259,7 @@ benchmarks behind the performance numbers are [sparkDash](https://github.com/Mia
 `pypi.nvidia.com/nvtorch_oot_nightly` index. On Linux the recipe takes all of this from
 `nvcr.io/nvidia/pytorch:26.07-py3`; on Windows the venv replaces that image (see *Python and torch* above).
 
-**Hardware.** Every number here was measured on an **NVIDIA RTX Spark** — the GB10 Grace Blackwell module
-(128 GB unified memory, 20 cores, 48 SMs at `sm_121`) running **Windows 11 ARM64**. Its Linux sibling is
-[DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/), which is what upstream's numbers were
-taken on; the silicon is the same, the OS and driver stack are not.
+**Hardware.** Every number here is from **Windows 11 ARM64** on an **NVIDIA RTX Spark** (GB10, `sm_121`); upstream's
+are from the same silicon under Linux ([DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)).
 
 If you believe something above is missing or credited wrongly, please open an issue.
