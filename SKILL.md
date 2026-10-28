@@ -675,8 +675,9 @@ info: flashnext: layer 47 took 1170 ms
     本机 2026-10-28 二分完了九组（每组一次重启、3 遍取最快）：全关 90.3 tok/s，配方全开 77.7，
     单开 `GATHER_READ=pread` 80.8，单开 `KEEP_LATE`+`GDN_LANES` 91.8，其余单项都在 ±1% 噪声内。
     结论：14% 的损失几乎全来自 `GATHER_READ=pread`（Windows 上是每行一次 `ReadFile`+`OVERLAPPED`，
-    不是 Linux 的映射页错误），只有 `KEEP_LATE`+`GDN_LANES` 站得住。所以 `config.ps1` 的**导出清单**
-    照 `config.sh` 补齐，**取值用本机实测的最优组合**——两者不是一回事，抄清单不等于抄取值。
+    不是 Linux 的映射页错误），只有 `KEEP_LATE`+`GDN_LANES` 站得住。架构是两层：`config.ps1` 是
+    `config.sh` 的**逐值镜像**（清单、顺序、取值全抄，没导出的也不导），本机实测最优组合放在配方
+    `.env`（`.env` 的每个 key 都压过镜像）——换机器时镜像仍然对，性能块按 `docs/knobs.md` §6 贴进去。
     prefill 一侧同一天也扫完了（32k，目标 2,735 tok/s）：两组 prompt 开关可叠加，`PROMPT_EXPERT_TILE=2`
     + `_ROWS=256` 单开 2,032、`PROMPT_HC2`+`SHARED_DIRECT`+`HEAD_PIECE=1536`+`GEMM2` 一组 1,874，
     合并 **2,291**，全关 1,706；而 `GATHER_READ=pread` 单开只有 **663**（2.6 倍损失，配方整套 731）。
@@ -744,7 +745,7 @@ info: flashnext: layer 47 took 1170 ms
 | 设了 `TENSORFOLD_LOAD_STATS=1` 却没有分段计时 | 变量名没进引擎（必须 `TENSORFOLD_` 前缀且在 `.env` 里），或看错了日志 | 分段行在 `serve-*.err.log`，`info:` 开头 |
 | `only 2 GiB host memory left while loading (MEM_FLOOR_GIB 4)` | staging 缓冲的正常占用，统一内存机型常见 | 只告警不阻断；要压下去就调小 `TENSORFOLD_LOAD_GROUP` |
 | `--parallel 5 needs 23.74 GiB … leaves 22.81 GiB` | 5 流的 fp8 KV 超出内存准入（加载完成后才报） | `.env` 里固定 `PARALLEL=4`，或降 `CONTEXT` |
-| 补丁全打上、二进制也是这棵树编的，但 decode 比页面慢 20% | 不是缺开关：配方那套开关在 WDDM 上是净损失（`GATHER_READ=pread` 一项就 −11%） | `config.ps1` 用本机实测的最优组合，别再照抄 `config.sh` 的取值；见第 9 章 #26 |
+| 补丁全打上、二进制也是这棵树编的，但 decode 比页面慢 20% | 不是缺开关：配方那套开关在 WDDM 上是净损失（`GATHER_READ=pread` 一项就 −11%） | `config.ps1` 镜像 `config.sh`，实测最优块贴在配方 `.env`（knobs.md §6）；见第 9 章 #26 |
 | 同一台机 prefill 两次测出来差 3 倍（714 vs 1,900 tok/s） | 有别的负载在抢 GPU/内存带宽，或上一轮 job 没退干净 | 先看 `/health` 的 `live.connections` 为 0，再跑；同一 job 内部也会有 3 个样本的离散 |
 
 ---

@@ -92,94 +92,64 @@ $MemCheck    = ((Get-Setting 'MEM_CHECK' '1') -ne '0')
 $Foreground  = ((Get-Setting 'FOREGROUND' '0') -eq '1')
 
 # ---- engine environment (exported: the spawned server inherits these, like config.sh) ----
-# Every variable below is one scripts/config.sh exports, and the engine reads an unset one as "off"
-# or as its stock rule -- so a port that skips them does not run the same engine, it runs a
-# different one. The VALUES, though, are this machine's, not config.sh's.
-#
-# Measured 2026-10-28, one stream, greedy code, best of three passes a run, one engine restart a
-# run (sweep-decode.ps1 -> decode-c1.txt): config.sh's whole set gave 77.7 tok/s, all of it off gave
-# 90.3. GATHER_READ=pread alone is the whole 14% (80.8 with it, 90.3 without) and drags the rest
-# down with it. Two switches do survive: KEEP_LATE and GDN_LANES (91.8 together, the best of the
-# nine combinations tried). So what ships here is the fastest set for WDDM, not the recipe's set.
-# config.sh's own figures (+14% greedy code at one stream, 15-25% a prompt call) are its Linux
-# image's and do not transfer. The prompt path was swept the same day (prefill-32k.txt): 2,291
-# tok/s at 32k with the set below, 1,706 with every prompt switch off, 663 with pread on.
-# A second round (prefill-stage2.txt, four phases) then closed the switch layer: CHUNK,
-# PROMPT_MX128 and PRODUCT_STREAMS are all flat -- 2,280 to 2,284 over four runs, a 0.19%
-# spread, nothing past the 0.6% promotion gate. CHUNK is the only axis with a real number on
-# it (8192 = 2,300.7, +0.77%) and it needs the memory reserve walked 10 -> 2 to load, so it is
-# not shipped either. The remaining 16% is per-row GEMM cost: 0.409 ms a row here against
-# ~0.34 for the page's 12.16 s first token, which is inside the kernels, not in front of them.
-# A third round then varied the expert tile's own knobs (PROMPT_EXPERT_TILE_CFG =
-# "pairs,gu,down", which picks a COMPILED KERNEL INSTANCE): the shipped 64,1,2 is a local
-# optimum, not an untested default -- pairs 32 cost 1.5%, 128 cost 2.4%, down rt4_s3 cost
-# 0.7%, and gu at 3 pipeline stages was 0. So the tile is load-bearing and already tuned.
-# A fourth round measured this same set at FOUR streams (sweep-decode4.ps1 -> decode-c4.txt):
-# 176.5 tok/s aggregate against 90.6 at one, in the same load -- 1.95x, 49% of linear -- and no
-# cross-stream switch moved it. BATCH_HEADS=0 and SHARED_SIDE=1 fell below every pass of the
-# drift-corrected anchor (so the stock batched heads stay on, the side stream stays off);
-# PRODUCT_STREAMS at 2/4/5, GATHER_EARLY and CONFIDENCE=0.4 all sat inside the base cluster, so
-# the recipe's 5 and the stock 0.6 stand. Read four-stream margins loosely: one run's three
-# passes spread 2-8% there and the box itself drifted ~9% across the session, so nothing under
-# ~5% is resolvable at this stream count. docs/knobs.md is the frozen table: every exported
-# variable with its evidence and confidence, one row each, nothing left "probably the default".
-$Yarn = [int](Get-Setting 'TF_FLASHNEXT_YARN' $(if ($Context -gt 262144) { 4 } else { 0 }))
-Set-EnvVar 'TF_FLASHNEXT_YARN' $Yarn
-# MTP: up to 6 drafts a round (also the engine default; spelled out because config.sh does).
+# A verbatim mirror of scripts/config.sh: the same 21 TF_FLASHNEXT_* exports, in its order, with
+# its comments, at its values. A setting config.sh does not export is not exported here either
+# (the engine reads an unset one as off or as its stock rule, which is what the recipe runs).
+# WDDM note: several of these values are the Linux image's and measured slower on Windows --
+# GATHER_READ=pread alone costs 2.6x on a 32k prompt. The four 2026-10-28 sweeps, every
+# measured number, and a ready-to-paste .env block that restores the fastest set for this box
+# are in docs/knobs.md.
+# config.sh exports no YaRN: v1.1.4's Flash Next CUDA engine has no extension past the native
+# 262,144 window (and the engine reads no such variable). A local 0 keeps start.ps1's checks and
+# banner working; it is not exported.
+$Yarn = 0
+# MTP: up to this many drafts a round (the engine's default is 6; drafts are checked, so replies match serial decoding).
 Set-EnvVar 'TF_FLASHNEXT_DRAFTS' (Get-Setting 'TF_FLASHNEXT_DRAFTS' 6)
-# config.sh ships 5 and the engine's stock is 2; bisected on the prompt path, 2 gave 2,281
-# against this 5's 2,283, i.e. noise. Keeping the recipe's value costs nothing measurable.
-Set-EnvVar 'TF_FLASHNEXT_PRODUCT_STREAMS' (Get-Setting 'TF_FLASHNEXT_PRODUCT_STREAMS' 5)
-# Off: the batched sampled draft, the GPU candidate pick, the pooled n-gram gather and the
-# worker-thread draws (patches 0007/0008/0011) were 1.0-1.7 tok/s on WDDM, inside the noise floor
-# a repeat run of one configuration sets (0.5%).
-Set-EnvVar 'TF_FLASHNEXT_SAMPLED_HEADS' (Get-Setting 'TF_FLASHNEXT_SAMPLED_HEADS' 0)
-Set-EnvVar 'TF_FLASHNEXT_SAMPLE_CAND' (Get-Setting 'TF_FLASHNEXT_SAMPLE_CAND' 0)
-Set-EnvVar 'TF_FLASHNEXT_GATHER_EARLY' (Get-Setting 'TF_FLASHNEXT_GATHER_EARLY' 0)
-Set-EnvVar 'TF_FLASHNEXT_HOST_DRAW_THREADS' (Get-Setting 'TF_FLASHNEXT_HOST_DRAW_THREADS' 0)
-# A partly rejected draft window keeps its rows in a log instead of replaying DeltaNet (0012).
-# On: 91.8 tok/s with it, 90.3 without -- the only pair that beat the baseline twice.
+# Sampled requests (temperature > 0, what chat clients send) in the batched draft pass, with the top candidates picked on the GPU
+# (patches 0007, 0008, 0011), all lanes' n-gram rows gathered in one pass (0010) and the host draws run on worker threads (0011).
+# None of them changes a reply's tokens (tools/exact.py, pDS-sampled-exact: drafted == serial == concurrent). 0 turns each off.
+Set-EnvVar 'TF_FLASHNEXT_SAMPLED_HEADS' (Get-Setting 'TF_FLASHNEXT_SAMPLED_HEADS' 1)
+Set-EnvVar 'TF_FLASHNEXT_SAMPLE_CAND' (Get-Setting 'TF_FLASHNEXT_SAMPLE_CAND' 1)
+Set-EnvVar 'TF_FLASHNEXT_GATHER_EARLY' (Get-Setting 'TF_FLASHNEXT_GATHER_EARLY' 1)
+Set-EnvVar 'TF_FLASHNEXT_HOST_DRAW_THREADS' (Get-Setting 'TF_FLASHNEXT_HOST_DRAW_THREADS' 7)
+# A partly rejected draft window no longer replays the DeltaNet state: the kept rows wait in a log and the next verify pass applies them (patch 0012).
 Set-EnvVar 'TF_FLASHNEXT_KEEP_LATE' (Get-Setting 'TF_FLASHNEXT_KEEP_LATE' 1)
-# n-gram rows by positional reads from a pool that reads ahead (0013). OFF, and this is the one
-# measurement that matters most here: pread costs 10.5 tok/s (80.8 vs 90.3) on Windows, where it is
-# ReadFile+OVERLAPPED per row (zig/src/platform/win_c.zig) rather than a mapped page fault. The
-# value stays a value, not a flag: only the literal 'pread' turns it on, so '0' is safely off.
-Set-EnvVar 'TF_FLASHNEXT_GATHER_READ' (Get-Setting 'TF_FLASHNEXT_GATHER_READ' '0')
-Set-EnvVar 'TF_FLASHNEXT_DRAFT_AHEAD' (Get-Setting 'TF_FLASHNEXT_DRAFT_AHEAD' 0)
-# Prompt-side switches. Swept 2026-10-28 at 32k against the recipe's 2,735 tok/s (cold prompt,
-# one request, sparkDash; sweep-prefill.ps1 -> prefill-32k.txt): what ships here is 2,291 tok/s,
-# 16% under the page and 34% over every prompt switch off (1,706). GATHER_READ=pread is the one
-# that must stay off -- 663 tok/s at 32k, 2.6x slower, which is also why config.sh's whole set
-# measures 731. WARM_AHEAD and PREFILL_TAIL are here at 0 because that is what measured: 1 and 512
-# gave 1,702 and 1,705 against a 1,706 baseline, i.e. nothing either way at this size.
-Set-EnvVar 'TF_FLASHNEXT_WARM_AHEAD' (Get-Setting 'TF_FLASHNEXT_WARM_AHEAD' 0)
-Set-EnvVar 'TF_FLASHNEXT_PREFILL_TAIL' (Get-Setting 'TF_FLASHNEXT_PREFILL_TAIL' 0)
-# Prompt passes (0014): fused hyper-connection/GEMM, straight-to-y shared expert, MTP head in
-# 1536-row pieces. 1,874 tok/s as a group (1,706 off), and it stacks with the expert tile below.
+# The n-gram table is read with pread by a thread pool and read ahead (draft tokens' rows during the head step, the next prompt chunk's rows during
+# the current one) instead of through an mmap that page-faults (patch 0013). The last two prompt chunks are evened out when the last would be under 512 rows.
+# On Windows this is ReadFile+OVERLAPPED per row rather than a mapped page fault, and it measured 2.6x slower on a 32k prompt: docs/knobs.md.
+Set-EnvVar 'TF_FLASHNEXT_GATHER_READ' (Get-Setting 'TF_FLASHNEXT_GATHER_READ' 'pread')
+Set-EnvVar 'TF_FLASHNEXT_DRAFT_AHEAD' (Get-Setting 'TF_FLASHNEXT_DRAFT_AHEAD' 1)
+Set-EnvVar 'TF_FLASHNEXT_WARM_AHEAD' (Get-Setting 'TF_FLASHNEXT_WARM_AHEAD' 1)
+Set-EnvVar 'TF_FLASHNEXT_PREFILL_TAIL' (Get-Setting 'TF_FLASHNEXT_PREFILL_TAIL' 512)
+# Prompt passes: the hyper-connection normalize, down GEMM, up GEMM and mix run as fused kernels, the shared expert's rows go straight into the y slot,
+# the routed experts use the shared-memory row tiles from 256 rows, and the MTP head takes prompt pieces of 1536 rows (patch 0014; bit-identical to the
+# unfused path: tf-cuda-test hc-fuse, exact.py, pDS-sampled-exact).
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_HC2' (Get-Setting 'TF_FLASHNEXT_PROMPT_HC2' 1)
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_SHARED_DIRECT' (Get-Setting 'TF_FLASHNEXT_PROMPT_SHARED_DIRECT' 1)
-Set-EnvVar 'TF_FLASHNEXT_HEAD_PIECE' (Get-Setting 'TF_FLASHNEXT_HEAD_PIECE' 1536)
-# The two-stage MX128 prompt tile (0015).
-Set-EnvVar 'TF_FLASHNEXT_PROMPT_GEMM2' (Get-Setting 'TF_FLASHNEXT_PROMPT_GEMM2' 1)
-# Routed experts on shared-memory row tiles from 256 rows (PROMPT_EXPERT_TILE: 0 off, 1 gate/up,
-# 2 both; giving it a value explicitly also lets it run at any rank count). 2,032 tok/s on its
-# own, the single biggest prompt win here.
-Set-EnvVar 'TF_FLASHNEXT_PROMPT_EXPERT_TILE' (Get-Setting 'TF_FLASHNEXT_PROMPT_EXPERT_TILE' 2)
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_EXPERT_TILE_ROWS' (Get-Setting 'TF_FLASHNEXT_PROMPT_EXPERT_TILE_ROWS' 256)
-# Decode rounds (0016): DeltaNet rows in three launches a layer instead of five a lane. GDN_LANES
-# needs KEEP_LATE=1. The side stream for the shared expert is off: 89.4 tok/s, 1.0% under baseline.
-Set-EnvVar 'TF_FLASHNEXT_SHARED_SIDE' (Get-Setting 'TF_FLASHNEXT_SHARED_SIDE' 0)
+Set-EnvVar 'TF_FLASHNEXT_HEAD_PIECE' (Get-Setting 'TF_FLASHNEXT_HEAD_PIECE' 1536)
+# The MX128 prompt tile with two pipeline stages and two blocks an SM (patch 0015): the same arithmetic and bits as the one-stage tile, 15-25% faster per call.
+Set-EnvVar 'TF_FLASHNEXT_PROMPT_GEMM2' (Get-Setting 'TF_FLASHNEXT_PROMPT_GEMM2' 1)
+# Decode rounds (patch 0016): the shared expert runs on a second stream beside the routed experts (decode rounds, windows and head passes only), and a shared
+# round takes every lane's DeltaNet rows in three launches a layer instead of five a lane (needs KEEP_LATE=1). Both bit-identical (exact.py, pDS-sampled-exact).
+Set-EnvVar 'TF_FLASHNEXT_SHARED_SIDE' (Get-Setting 'TF_FLASHNEXT_SHARED_SIDE' 1)
 Set-EnvVar 'TF_FLASHNEXT_GDN_LANES' (Get-Setting 'TF_FLASHNEXT_GDN_LANES' 1)
-# Draft chain stop rule (0017): a running product >= 0.4 while up to 5 streams draft together,
-# where v1.1.4's stock rule is a per-draft floor of 0.6. Only the draft row count changes, never a
-# reply. 0.6 (stock) here: -0.4 measured 90.6, i.e. inside the noise floor, while the recipe's
-# Linux image claims +14% with it.
-Set-EnvVar 'TF_FLASHNEXT_CONFIDENCE' (Get-Setting 'TF_FLASHNEXT_CONFIDENCE' 0.6)
+# The draft chain stops on the running product of its draft probabilities (keep draft j while p1*...*pj >= 0.4; the db281878 build's rule) up to 5 streams
+# drafting together, the per-draft floor 0.5 above (patch 0017). v1.1.4's default is the per-draft floor 0.6. Only the number of draft rows changes, never a reply:
+# greedy code +4% at 5 streams, +10% at 3, +14% at 1; prose and sampled flat. TF_FLASHNEXT_CONFIDENCE=0.6 restores the stock rule.
+Set-EnvVar 'TF_FLASHNEXT_CONFIDENCE' (Get-Setting 'TF_FLASHNEXT_CONFIDENCE' '-0.4')
+Set-EnvVar 'TF_FLASHNEXT_PRODUCT_STREAMS' (Get-Setting 'TF_FLASHNEXT_PRODUCT_STREAMS' 5)
+# Image and video. VISION=1 (default) passes --vision: rank 0 starts the Python helper (Pillow, PyAV, the 27-layer
+# tower). VISION=0 is text only and returns the 2 GiB workspace to the KV budget.
 Set-EnvVar 'TENSORFOLD_MAX_IMAGES' (Get-Setting 'TENSORFOLD_MAX_IMAGES' 50)
 Set-EnvVar 'TENSORFOLD_IMAGE_TOKENS' (Get-Setting 'TENSORFOLD_IMAGE_TOKENS' 16384)
 Set-EnvVar 'TENSORFOLD_VIDEO_TOKENS' (Get-Setting 'TENSORFOLD_VIDEO_TOKENS' 16384)
 Set-EnvVar 'TENSORFOLD_VISION_WORKSPACE_MIB' (Get-Setting 'TENSORFOLD_VISION_WORKSPACE_MIB' 2048)
-Set-EnvVar 'TENSORFOLD_MEMORY_RESERVE_GIB' (Get-Setting 'TENSORFOLD_MEMORY_RESERVE_GIB' 10)
+# The engine keeps this much MemAvailable free when it sizes the KV pool.
+# 9 GiB since patch 0014: the prompt scratch of the fused hyper-connection path takes ~0.55 GiB more of the pool, and five full 262,144-token windows
+# need 23.9 GiB; with a 10 GiB reserve and the 2 GiB vision workspace the pool left 23.8 GiB. Keep nothing else big running on the Spark.
+# This box has 30.5 GiB of host, not 121: .env carries RESERVE=4 and PARALLEL=4 (five streams' KV would not pass admission).
+Set-EnvVar 'TENSORFOLD_MEMORY_RESERVE_GIB' (Get-Setting 'TENSORFOLD_MEMORY_RESERVE_GIB' 9)
 Set-EnvVar 'TENSORFOLD_NO_UPDATE_CHECK' (Get-Setting 'TENSORFOLD_NO_UPDATE_CHECK' 1)
 $MemReserveGiB = [double]$env:TENSORFOLD_MEMORY_RESERVE_GIB
 $MemFloorGiB   = [double](Get-Setting 'MEM_FLOOR_GIB' $MemReserveGiB)

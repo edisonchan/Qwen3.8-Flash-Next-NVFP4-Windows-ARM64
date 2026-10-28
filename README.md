@@ -124,6 +124,7 @@ $root = (Get-Content .migration.local.json -Raw | ConvertFrom-Json).root
 $Q    = Join-Path $root 'Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold'
 # 30.5 GB of host memory on this class of machine: 5 streams need 23.74 GiB of KV and the
 # admission budget is 22.81 GiB, so 4 is what fits. Failed only after all 48 layers loaded.
+# The full block to paste (WDDM measured set + these two lines): docs/knobs.md section 6.
 Add-Content "$Q\.env" @('TENSORFOLD_LOAD_STATS=1', 'PARALLEL=4')
 
 & "$Q\start.ps1"    # [start.ps1] server answered after 71s
@@ -196,8 +197,10 @@ climbs past a few percent, raise `TENSORFOLD_LOAD_GROUP` before touching anythin
 
 Measured with sparkDash — the same benchmark the upstream recipe's page runs (`Decode, code`: code
 prompt, temperature 0, thinking off; prefill: one cold 32k request). Best of three passes, engine
-restarted per configuration; the shipped `config.ps1` values are what those sweeps settled on
-(every knob, its evidence and confidence: [`docs/knobs.md`](docs/knobs.md)).
+restarted per configuration. `config.ps1` mirrors `config.sh` value for value; the numbers below
+run on the WDDM measured set, which lives in the recipe's `.env` (the block and every knob's
+evidence: [`docs/knobs.md`](docs/knobs.md) — without it, the recipe's own set scores 77.7 / 731
+on this driver stack).
 
 | bench | recipe page (Linux) | this port (WDDM) |
 |---|---|---|

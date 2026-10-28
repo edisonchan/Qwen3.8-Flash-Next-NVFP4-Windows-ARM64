@@ -564,9 +564,10 @@ Linux 那套"环境优先、`.env` 只补空缺"的语义会让旧默认值反�
 | 其余四项单项 | 89.4–91.0，全在 ±1% 噪声内 |
 
 14% 的损失几乎全来自 `GATHER_READ=pread`——Windows 上是每行一次 `ReadFile`+`OVERLAPPED`，
-不是 Linux 那种映射页错误；只有 `KEEP_LATE`+`GDN_LANES` 站得住。所以 `config.ps1` 现在的默认值是
-**本机实测的最优组合**，而不是 `config.sh` 的那一套：导出清单与 `config.sh` 一一对应（差集为空），
-取值不同，文件头的注释写了每一组数字和理由。配方 README 里那些 +14% / 15–25% 是它自己 Linux 镜像
+不是 Linux 那种映射页错误；只有 `KEEP_LATE`+`GDN_LANES` 站得住。落地的架构是两层：
+`config.ps1` 是 `config.sh` 的**逐值镜像**（导出清单与取值都照抄，差集为空，`config.sh` 没导出的
+也不导）；**本机实测最优组合放在配方的 `.env`**（`.env` 的每个 key 压过镜像，块在
+`docs/knobs.md` §6）。配方 README 里那些 +14% / 15–25% 是它自己 Linux 镜像
 上的数字，不能当作 Windows 上的预期。
 
 prefill 一侧同一天扫完（`sweep-prefill.ps1` → `prefill-32k.txt`），结论同向：目标 2,735 tok/s

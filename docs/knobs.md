@@ -1,27 +1,28 @@
 # The engine knobs, frozen
 
-Every variable `recipe/config.ps1` exports, with the measurement behind its value. This is the
-settled state: four sweeps ran on 2026-10-28 (23 configurations, one engine restart each, three
-passes a configuration, fastest pass scored), and this table is what they left behind. If you want
-to change one of these values, change it in the sweep harness and beat the number here first.
+`recipe/config.ps1` is a **verbatim mirror of `config.sh`**: same exports, same order, same
+values, unset means unset. The measured-best set for this box is not baked into it — paste the
+block at the bottom of this file into the recipe's `.env` to run on it (`.env` outranks the
+mirror). Below: every knob, what it measured, and what to run.
 
 Scored against the MiaAI-Lab page with the same instrument it uses — sparkDash:
 
-| bench | page | this port | how |
+| bench | page | this port, .env set | as shipped (config.sh's values) |
 |---|---|---|---|
-| decode, 1 stream (code, t=0, thinking off, 400 tok) | 110.5 tok/s | **91.8** | best of 3, `decode-c1.txt` |
-| decode, 4 streams aggregate | — | **176.5** | 1.95× linear-49%, 47.6 a stream, `decode-c4.txt` |
-| prefill, 32k (32,807 tok, cold, one request) | 2,735 tok/s | **2,291** | best of 3, `prefill-32k.txt` |
+| decode, 1 stream (code, t=0, thinking off, 400 tok) | 110.5 tok/s | **91.8** | 77.7 |
+| decode, 4 streams aggregate | — | **176.5** (47.6 a stream) | — |
+| prefill, 32k (32,807 tok, cold, one request) | 2,735 tok/s | **2,291** | 731 |
 
 Both gaps are the same ~16%, and both bottom out in the kernels rather than in front of them:
 0.409 ms a prompt row against the page's ~0.34, ~10.9 ms a decoded token. No variable below moves
 either number. That is the finding, not a failure to look hard enough — see §4.
 
-## 1. What ships
+## 1. The measured set (the .env block at the bottom)
 
 The 21 `TF_FLASHNEXT_*` variables are one-for-one with `config.sh`'s exports (the diff of the two
-export lists is empty — `docs/patching-and-port.md` §6.5 has the check). The **values** are this
-machine's. Verdict column: **won** = beat its group's baseline past the noise floor; **flat** =
+export lists is empty — `docs/patching-and-port.md` §6.5 has the check). The table is what each
+one measured; the **value** column is the fastest set this box has, which the .env block applies.
+Verdict column: **won** = beat its group's baseline past the noise floor; **flat** =
 measured, moved nothing, kept at engine/recipe value as documented; **source** = the engine code
 makes any other value a no-op or a lie (file and rule named); **stock** = engine default, spelled
 out only because `config.sh` does.
@@ -112,3 +113,30 @@ kept outside the repo under `D:\llm\latest\sweep\`) encode rules learned the har
 - Never run the sweep from an agent-driven shell — the harness's own host pollutes the bench. Run it
   from a console, and let the harness rewrite `.env` per candidate (it restores the shipped set at
   the end).
+
+## 6. The measured set, as a .env block
+
+`config.ps1` mirrors `config.sh`; performance lives in the recipe's `.env` (every key there
+outranks the mirror). Paste this into `<recipe>\.env` for the fastest set this box has measured;
+delete it to return to the recipe's own values (77.7 / 731 — keep it in).
+
+```ini
+# WDDM measured set (2026-10-28 sweeps) — evidence per line: docs/knobs.md §1
+TF_FLASHNEXT_GATHER_READ=0          # vs pread: 2.6x on a 32k prompt
+TF_FLASHNEXT_DRAFT_AHEAD=0          # meaningful only with pread
+TF_FLASHNEXT_SAMPLED_HEADS=0        # sampling path: inert at t=0, cost on WDDM
+TF_FLASHNEXT_SAMPLE_CAND=0
+TF_FLASHNEXT_HOST_DRAW_THREADS=0
+TF_FLASHNEXT_GATHER_EARLY=0
+TF_FLASHNEXT_WARM_AHEAD=0           # nothing at 32k either way
+TF_FLASHNEXT_PREFILL_TAIL=0
+TF_FLASHNEXT_SHARED_SIDE=0          # -1.0% at x1, below anchor at x4
+TF_FLASHNEXT_CONFIDENCE=0.6         # the stock rule; the recipe's -0.4 is noise here
+# this box (30.5 GiB host): 5 streams fail admission, reserve is a budget not a knob
+TENSORFOLD_MEMORY_RESERVE_GIB=4
+PARALLEL=4
+TENSORFOLD_LOAD_STATS=1
+```
+
+`PROMPT_EXPERT_TILE=2` is deliberately not in the block: `config.sh` does not export it, the
+engine's unset default already selects `.both` at one rank, and this port always runs one rank.

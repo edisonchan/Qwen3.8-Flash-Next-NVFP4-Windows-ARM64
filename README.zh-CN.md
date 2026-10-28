@@ -112,6 +112,7 @@ $root = (Get-Content .migration.local.json -Raw | ConvertFrom-Json).root
 $Q    = Join-Path $root 'Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold'
 # 这类机器整机只有 30.5 GB host 内存：5 流要 23.74 GiB 的 KV，准入预算 22.81 GiB，放不下；
 # 而且它是 48 层全加载完之后才报错，很容易误判成"加载慢"。4 流可以正常起服。
+# 完整要贴的块（WDDM 实测最优集 + 这两行）在 docs/knobs.md 第 6 节。
 Add-Content "$Q\.env" @('TENSORFOLD_LOAD_STATS=1', 'PARALLEL=4')
 
 & "$Q\start.ps1"    # [start.ps1] server answered after 71s
@@ -181,8 +182,9 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 ## 吞吐：用 sparkDash 实测
 
 用 sparkDash 测——和上游配方页面跑的是同一套基准（`Decode, code`：code 提示词、temperature 0、
-关思考；prefill：单条冷启动 32k 请求）。每个配置重启引擎、跑三遍取最快；`config.ps1` 现在导出的
-就是这些扫描定下来的取值（每个旋钮的取值、证据与置信度，见 [`docs/knobs.md`](docs/knobs.md)）。
+关思考；prefill：单条冷启动 32k 请求）。每个配置重启引擎、跑三遍取最快。`config.ps1` 逐值镜像
+`config.sh`；下面的数字跑在 WDDM 实测最优集上，它放在配方的 `.env` 里（env 块与每个旋钮的证据见
+[`docs/knobs.md`](docs/knobs.md)——不放这块，按配方原值在本驱动栈上只有 77.7 / 731）。
 
 | 基准 | 配方页面（Linux） | 本移植（WDDM） |
 |---|---|---|
