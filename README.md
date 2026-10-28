@@ -202,7 +202,7 @@ below are reproduced exactly as sparkDash reported them.
 | bench | recipe page (Linux) | this port (WDDM) |
 |---|---|---|
 | decode, code, 1 stream | 110.5 tok/s | **89.2 tok/s** (−19%) |
-| decode, code, 4 streams | — | **172.1 tok/s** aggregate (47.3 a stream) |
+| decode, code, 4 streams | 192.9 tok/s aggregate (52.7 a stream) | **172.1 tok/s** aggregate (47.3 a stream) (−11%) |
 | prefill, 32k | 2,735 tok/s | **2,280 tok/s** (−17%) |
 
 Panels from 2026-10-28, as sparkDash reported them: decode at 1/2/3/4 streams, all four prompt

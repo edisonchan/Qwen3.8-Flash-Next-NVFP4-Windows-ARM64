@@ -187,7 +187,7 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 | 基准 | 配方页面（Linux） | 本移植（WDDM） |
 |---|---|---|
 | decode · code 单流 | 110.5 tok/s | **89.2 tok/s**（−19%） |
-| decode · code 4 流 | — | **172.1 tok/s** 聚合（单流 47.3） |
+| decode · code 4 流 | 192.9 tok/s 聚合（单流 52.7） | **172.1 tok/s** 聚合（单流 47.3）（−11%） |
 | prefill 32k | 2,735 tok/s | **2,280 tok/s**（−17%） |
 
 2026-10-28 的 sparkDash 面板截图，按面板报出的数字原样收录：decode 四种提示词 × 1/2/3/4 流、
