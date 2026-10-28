@@ -182,7 +182,7 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 
 用 sparkDash 测——和上游配方页面跑的是同一套基准：decode 四种提示词 × 1/2/3/4 并发流
 （temperature 0、关思考、400 token）、prefill 1k–128k 阶梯、797 题质量评测与工具评测。
-引擎 1.1.4，`config.ps1` 按出厂状态运行（`config.sh` 的逐值镜像）。
+引擎 1.1.4，跑在本移植上；下面的面板按 sparkDash 报出的数字原样收录。
 
 | 基准 | 配方页面（Linux） | 本移植（WDDM） |
 |---|---|---|

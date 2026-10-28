@@ -196,8 +196,8 @@ climbs past a few percent, raise `TENSORFOLD_LOAD_GROUP` before touching anythin
 
 Measured with sparkDash — the same benchmark the upstream recipe's page runs: decode at 1–4
 concurrent streams over four prompt types (temperature 0, thinking off, 400 tokens), the prefill
-ladder 1k–128k, a 797-item quality pass and the tool eval. Engine 1.1.4, `config.ps1` as shipped
-(a verbatim mirror of `config.sh`).
+ladder 1k–128k, a 797-item quality pass and the tool eval. Engine 1.1.4 on this port; the panels
+below are reproduced exactly as sparkDash reported them.
 
 | bench | recipe page (Linux) | this port (WDDM) |
 |---|---|---|
