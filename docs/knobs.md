@@ -13,6 +13,10 @@ Scored against the MiaAI-Lab page with the same instrument it uses — sparkDash
 | decode, 4 streams aggregate | — | **176.5** (47.6 a stream) | — |
 | prefill, 32k (32,807 tok, cold, one request) | 2,735 tok/s | **2,291** | 731 |
 
+Screenshots of the full run set (decode code/JSON/prose/structured at 1–4 streams, the 1k–128k
+prefill ladder, quality 96.8%, tool eval 84.0) are in [`docs/bench/`](bench/), also embedded in
+the READMEs.
+
 Both gaps are the same ~16%, and both bottom out in the kernels rather than in front of them:
 0.409 ms a prompt row against the page's ~0.34, ~10.9 ms a decoded token. No variable below moves
 either number. That is the finding, not a failure to look hard enough — see §4.

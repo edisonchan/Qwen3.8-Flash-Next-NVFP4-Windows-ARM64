@@ -37,6 +37,7 @@ ARM64——**NVIDIA RTX Spark**（GB10，128 GB 统一内存，`sm_121`）——
 | `SKILL.md`、`references/` | 同一套流程的 agent 可执行形态（WorkBuddy / Claude skill 布局），外加构建笔记与验证记录 |
 | `docs/patching-and-port.md` | 长文：每份补丁怎么切出来的、踩了什么、`.sh → .ps1` 的取舍逐条 |
 | `docs/knobs.md` | 引擎旋钮的冻结表：每个导出变量的取值、实测证据与置信度，外加「绝不能开」清单、看着能调其实不能调的假旋钮、以及再次扫描时的测量纪律 |
+| `docs/bench/` | 上面那张表的 sparkDash 截图原件：decode 四种提示词 × 1–4 流、prefill 1k–128k 阶梯、质量、工具评测 |
 | `NOTICE`、`LICENSES/`、`CREDITS.md` | 许可链。二次分发前先读 `NOTICE` |
 | `VERSIONS.md` | 钉死的引擎 / 配方 / 权重 / 工具链版本、补丁哈希，以及挪动任一版本会坏在哪 |
 
@@ -191,6 +192,18 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 | decode 单流 | 110.5 tok/s | **91.8 tok/s**（−17%） |
 | decode 4 流 | — | **176.5 tok/s** 聚合（单流 47.6） |
 | prefill 32k | 2,735 tok/s | **2,291 tok/s**（−16%） |
+
+2026-10-28 的 sparkDash 实测截图，引擎 1.1.4，跑的是镜像 `config.ps1` 之上、`.env` 里的 WDDM
+实测最优集——是面板直接报的单次数，与上表「三遍取最快」差一个遍间抖动属正常。decode 四种提示词
+× 1/2/3/4 流、prefill 1k–128k 整条阶梯，外加质量与工具评测——快而答错不算数。
+
+| Decode · code | Decode · JSON | Decode · prose | Decode · structured |
+|---|---|---|---|
+| ![decode code](docs/bench/code.png) | ![decode json](docs/bench/json.png) | ![decode prose](docs/bench/prose.png) | ![decode structured](docs/bench/struct.png) |
+
+| Prefill 1k–128k | 质量（96.8%） | 工具评测（84.0） |
+|---|---|---|
+| ![prefill ladder](docs/bench/prefill.png) | ![quality](docs/bench/quality.png) | ![tool eval](docs/bench/toolcall.png) |
 
 两个差距是同一个差距：prompt 每行约 0.409 ms、解码每 token 约 10.9 ms，落在 WDDM 驱动栈的
 kernel 里面。四轮共 23 个配置的扫描没能撼动这两个数字中的任何一个——把配方整套开关搬回来更是

@@ -47,6 +47,7 @@ the same tree that was measured; [`VERSIONS.md`](VERSIONS.md) explains each pin 
 | `SKILL.md`, `references/` | The same procedure in agent-facing form (WorkBuddy/Claude skill layout), plus build notes and the verification record |
 | `docs/patching-and-port.md` | Long form: how each patch was cut, what broke, and the `.sh` → `.ps1` decisions one by one |
 | `docs/knobs.md` | The frozen engine-knob table: every exported variable with its value, its measurement, and its confidence — plus the must-not list, the knobs that are not knobs, and the measurement rules for sweeping again |
+| `docs/bench/` | The sparkDash screenshots behind the table above: four decode prompt types at 1–4 streams, the 1k–128k prefill ladder, quality, tool eval |
 | `NOTICE`, `LICENSES/`, `CREDITS.md` | License chain. Read `NOTICE` before redistributing anything |
 | `VERSIONS.md` | The pinned engine / recipe / checkpoint / toolchain, the patch hashes, and what breaks if a pin moves |
 
@@ -207,6 +208,20 @@ on this driver stack).
 | decode, 1 stream | 110.5 tok/s | **91.8 tok/s** (−17%) |
 | decode, 4 streams | — | **176.5 tok/s** aggregate (47.6 a stream) |
 | prefill, 32k | 2,735 tok/s | **2,291 tok/s** (−16%) |
+
+sparkDash screenshots from 2026-10-28, engine 1.1.4, the WDDM measured set from `.env` on top of
+the mirrored `config.ps1` — single runs as the panel reports them, so they sit a pass-to-pass
+wobble from the best-of-three table above. Decode at 1/2/3/4 streams, all four prompt types; the
+full prefill ladder 1k–128k; quality and tool eval for correctness, since a fast wrong answer is
+still wrong.
+
+| Decode, code | Decode, JSON | Decode, prose | Decode, structured |
+|---|---|---|---|
+| ![decode code](docs/bench/code.png) | ![decode json](docs/bench/json.png) | ![decode prose](docs/bench/prose.png) | ![decode structured](docs/bench/struct.png) |
+
+| Prefill, 1k–128k | Quality (96.8%) | Tool eval (84.0) |
+|---|---|---|
+| ![prefill ladder](docs/bench/prefill.png) | ![quality](docs/bench/quality.png) | ![tool eval](docs/bench/toolcall.png) |
 
 The two gaps are the same gap: ~0.409 ms a prompt row and ~10.9 ms a token, inside the kernels on
 the WDDM driver stack. Twenty-three swept configurations (four sweeps, 2026-10-28) moved neither —
