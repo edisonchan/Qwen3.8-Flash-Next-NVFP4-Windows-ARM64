@@ -1,5 +1,5 @@
 Qwen3.8-Flash-Next NVFP4 on Windows 11 ARM64 -- an unofficial port
-Copyright 2026 edison
+Copyright 2026 edisonchan
 
 Unofficial. This repository is not affiliated with, sponsored by, or endorsed by
 MiaAI-Lab, the TensorFold authors, NVIDIA, or the Qwen team. It is a port of
@@ -17,7 +17,7 @@ It contains no model weights and no compiled binaries.
   patches/0002-windows-arm64-port.patch
   patches/0003-load-pipeline.patch
 
-  Copyright (c) 2026 edison. MIT License, full text in LICENSE.
+  Copyright (c) 2026 edisonchan. MIT License, full text in LICENSE.
   CREDITS.md is not listed here: it is MiaAI-Lab's file, see section 2.
 
 
@@ -43,7 +43,7 @@ It contains no model weights and no compiled binaries.
   messages, same .env semantics. The shell originals are Copyright (c) 2026
   MiaAI-Lab under the MIT License; the PowerShell translation and the two
   PowerShell 5.1 fixes it carries (empty-body test in the health probe, explicit
-  -Method on every request) are Copyright (c) 2026 edison, also MIT.
+  -Method on every request) are Copyright (c) 2026 edisonchan, also MIT.
 
 
 3. TensorFold -- Apache-2.0 from 0.6.0, MIT before that
@@ -65,7 +65,7 @@ It contains no model weights and no compiled binaries.
   licenses require; nothing is renamed in content.
 
   Statement of changes, Apache-2.0 s4(b). The patches below modify TensorFold's
-  source and quote it as diff context. They were made by edison in October 2026,
+  source and quote it as diff context. They were made by edisonchan in October 2026,
   are not part of any TensorFold release, and are not endorsed by TensorFold:
 
     patches/0002-windows-arm64-port.patch
@@ -127,10 +127,10 @@ It contains no model weights and no compiled binaries.
 --------------------------------
 
   patches/0001-recipe-0001-0017-on-v1.1.4.patch   MiaAI-Lab, patches 0001..0017 merged
-  patches/0002-windows-arm64-port.patch           edison, 5 platform fixes on TensorFold
-  patches/0003-load-pipeline.patch                edison, 4 loader files on TensorFold
-  recipe/*.ps1                                    MiaAI-Lab (.sh) + edison (.ps1)
-  scripts/*.ps1, references/*.md, docs/, SKILL.md edison
+  patches/0002-windows-arm64-port.patch           edisonchan, 5 platform fixes on TensorFold
+  patches/0003-load-pipeline.patch                edisonchan, 4 loader files on TensorFold
+  recipe/*.ps1                                    MiaAI-Lab (.sh) + edisonchan (.ps1)
+  scripts/*.ps1, references/*.md, docs/, SKILL.md edisonchan
   CREDITS.md                                      MiaAI-Lab, reproduced with a provenance note at the top
 
   See CREDITS.md for everyone this port builds on.

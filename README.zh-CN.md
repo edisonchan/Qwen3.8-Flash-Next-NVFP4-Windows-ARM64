@@ -23,7 +23,7 @@ ARM64（GB10 / `sm_121`）的**非官方**版本。同一个 NVFP4 权重、同�
 ## 快速开始
 
 ```powershell
-git clone https://github.com/<you>/Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
+git clone https://github.com/edisonchan/Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
 cd Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
 
 # 预检 -> 克隆两个仓库 -> 打 3 份补丁 -> vision venv -> 构建 -> 冒烟

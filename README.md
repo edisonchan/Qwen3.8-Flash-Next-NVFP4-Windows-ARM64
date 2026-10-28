@@ -32,7 +32,7 @@ upstream recipe (MiaAI-Lab, MIT)          this repository
 ## Quick start
 
 ```powershell
-git clone https://github.com/<you>/Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
+git clone https://github.com/edisonchan/Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
 cd Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
 
 # preflight -> clone both repos -> 3 patches -> vision venv -> build -> smoke
