@@ -188,3 +188,54 @@ MSVC 2022 Build Tools（含 ARM64 host）· PowerShell 5.1 · 仅 `--vision` 需
 哪个文件归哪条，`NOTICE` 里写清楚了，全文都在 `LICENSES/`。不含权重、不含二进制——不会误授权。
 
 与 MiaAI-Lab、TensorFold 作者、NVIDIA、通义千问团队**无隶属关系**，也未经其背书。
+
+## 致谢
+
+本仓库只是一层薄脚本，真正让它跑起来的东西几乎都是别人做的。逐条（精确到每个补丁）的完整记录在
+[`CREDITS.md`](CREDITS.md)，每个文件归哪条许可在 [`NOTICE`](NOTICE)。
+
+**模型。** [Qwen3.8 Flash Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next)，作者是阿里巴巴
+[通义千问团队](https://huggingface.co/Qwen)：模型设计、训练、对话模板与 MTP 头，许可为
+[Qwen Community License 1.0](https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE)。
+
+**权重。** [`nvidia/Qwen3.8-Flash-Next-FP4-Local`](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-FP4-Local)
+由 **NVIDIA** 出品：以 bf16 模型为教师做量化感知蒸馏（QAD）、用 NVIDIA Model Optimizer 导出——NVFP4 路由专家
+配 CSF 压缩缩放因子、MXFP8 的注意力 / DeltaNet / 共享专家、NVFP4 n-gram 表、量化后的 MTP 与视觉塔。适用
+[NVIDIA Open Model Agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-agreement/)，
+同时继承 Qwen 许可。可选的 `CHECKPOINT=int4` 预设是 **azampatti** 的
+[`azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound`](https://huggingface.co/azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound)
+（top-5 专家裁剪、共享专家修复、打包），基于 **Intel** 的
+[AutoRound W4A16](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound) 与 **Saren-Arterius** 的混合
+checkpoint；更早的 MLX 4-bit 路线来自
+[`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP)。
+
+**引擎。** [TensorFold](https://github.com/ashhart/TensorFold)，作者 **Ash Hart**
+（[ashhart](https://github.com/ashhart)）与 TensorFold 贡献者：Zig 引擎 `tensorfold-native`、CUDA 运行时与
+kernel、带精确校验的 MTP 草稿、OpenAI 兼容服务端（v0.6.0 起 Apache 2.0，之前是 MIT）。Zig 侧的 CUDA 服务
+路径与 CUDA family registry 是 **Jürgen Schmied**（[jschmied](https://github.com/jschmied)）在
+[PR #443](https://github.com/ashhart/TensorFold/pull/443) 里的工作。用 **[Zig](https://ziglang.org)** 0.17.0
+（Zig 软件基金会，MIT）与 CUDA 13.4 构建。
+
+**配方与补丁。** [MiaAI-Lab 的配方](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold)
+（commit `fd3f43e`）、它在 TensorFold v1.1.4 上的 17 个补丁、`start.sh` / `stop.sh` / `scripts/`、`tools/` 里的
+检查脚本，以及更早的 db281878 系列，都是 **MiaAI-Lab** 的成果。其中被继承的贡献者还有：
+[tempeste](https://github.com/tempeste)（drain 后释放、准入回收、prompt cache 里的图像 prompt）、
+[BadAd84](https://github.com/BadAd84)（分片填充，PR #53）、
+[MovieMaker93](https://github.com/MovieMaker93)（prefill 行，TensorFold #40）、
+[jvr0x](https://github.com/jvr0x)（多语言草稿词表）、
+[321sssrt-bit](https://github.com/321sssrt-bit)（整窗准入、`tools/context_boundary.py`）。
+本文件里的性能数字是用 [sparkDash](https://github.com/MiaAI-Lab/sparkDash) 测的。
+
+**运行时。** CUDA / NCCL 来自 NVIDIA；[transformers](https://github.com/huggingface/transformers)、
+[Hugging Face Hub](https://huggingface.co/)、[safetensors](https://github.com/huggingface/safetensors)；
+[Triton](https://github.com/triton-lang/triton)（引擎回放它编译出的 cubin）；
+[PyAV](https://github.com/PyAV-Org/PyAV) + [FFmpeg](https://ffmpeg.org/)（视频）、
+[Pillow](https://python-pillow.org/)（图像）；Windows 上的 torch / torchvision 来自 NVIDIA 的
+`pypi.nvidia.com/nvtorch_oot_nightly` 索引。Linux 上这些都由 `nvcr.io/nvidia/pytorch:26.07-py3` 镜像提供，
+Windows 上那个镜像不存在，由 venv 顶上（见上面《Python 与 torch》）。
+
+**硬件。** 这里的每个数字都测于一
+[NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)（GB10 Grace Blackwell，
+128 GB 统一内存，20 核，48 SMs，`sm_121`）。
+
+如果你觉得上面漏了人或写错了，请开 issue。

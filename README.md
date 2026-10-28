@@ -202,3 +202,56 @@ it so GitHub detects it as MIT; `NOTICE` says which files each holder covers, an
 full text. No weights, no binaries, nothing to relicense by accident.
 
 Not affiliated with, sponsored by, or endorsed by MiaAI-Lab, the TensorFold authors, NVIDIA or the Qwen team.
+
+## Credits
+
+This repository is a thin layer of scripts. Almost everything that makes it work was built by others; the
+full, patch-by-patch record is in [`CREDITS.md`](CREDITS.md), and [`NOTICE`](NOTICE) says which files each
+license holder covers.
+
+**Model.** [Qwen3.8 Flash Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) by the
+[Qwen team](https://huggingface.co/Qwen) at Alibaba — design, training, chat template and MTP head, under the
+[Qwen Community License 1.0](https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE).
+
+**Checkpoint.** [`nvidia/Qwen3.8-Flash-Next-FP4-Local`](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-FP4-Local)
+by **NVIDIA** — Qwen3.8 Flash Next quantized with quantization-aware distillation against the bf16 teacher,
+using NVIDIA Model Optimizer: NVFP4 routed experts with CSF-compressed scales, MXFP8 attention / DeltaNet /
+shared experts, an NVFP4 n-gram table, quantized MTP and vision towers. Under the
+[NVIDIA Open Model Agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-agreement/);
+the Qwen license applies as well. The optional `CHECKPOINT=int4` preset is
+[`azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound`](https://huggingface.co/azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound)
+by **azampatti** (expert cut, shared-expert healing, packaging), built on **Intel**'s
+[AutoRound W4A16](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound) and on the hybrid checkpoint
+of **Saren-Arterius**; the earlier MLX-4bit path was
+[`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP).
+
+**Engine.** [TensorFold](https://github.com/ashhart/TensorFold) by **Ash Hart** ([ashhart](https://github.com/ashhart))
+and the TensorFold contributors — the Zig engine `tensorfold-native`, its CUDA runtime and kernels, MTP drafting
+with exact verification and the OpenAI-compatible server (Apache 2.0 from v0.6.0, MIT before). The Zig CUDA
+serving path and the CUDA family registry are **Jürgen Schmied**'s
+([jschmied](https://github.com/jschmied)) work in [PR #443](https://github.com/ashhart/TensorFold/pull/443).
+Built with **[Zig](https://ziglang.org)** 0.17.0 (Zig Software Foundation, MIT) and CUDA 13.4.
+
+**Recipe and patches.** The [MiaAI-Lab recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold)
+(commit `fd3f43e`), its 17 patches on TensorFold v1.1.4, `start.sh` / `stop.sh` / `scripts/`, the checks in
+`tools/`, and the earlier db281878 series are **MiaAI-Lab**'s work. Contributors carried forward there:
+[tempeste](https://github.com/tempeste) (free-after-drain and admission reclaim, image prompts in the prompt
+cache), [BadAd84](https://github.com/BadAd84) (sliced fills, PR #53),
+[MovieMaker93](https://github.com/MovieMaker93) (prefill rows, TensorFold #40),
+[jvr0x](https://github.com/jvr0x) (language draft vocabularies) and
+[321sssrt-bit](https://github.com/321sssrt-bit) (full-window admission, `tools/context_boundary.py`). The
+benchmarks behind the performance numbers are [sparkDash](https://github.com/MiaAI-Lab/sparkDash).
+
+**Runtime stack.** CUDA / NCCL from NVIDIA; [transformers](https://github.com/huggingface/transformers),
+[Hugging Face Hub](https://huggingface.co/) and [safetensors](https://github.com/huggingface/safetensors);
+[Triton](https://github.com/triton-lang/triton) (the engine replays its compiled cubins);
+[PyAV](https://github.com/PyAV-Org/PyAV) + [FFmpeg](https://ffmpeg.org/) for video and
+[Pillow](https://python-pillow.org/) for images; torch and torchvision from NVIDIA's
+`pypi.nvidia.com/nvtorch_oot_nightly` index. On Linux the recipe takes all of this from
+`nvcr.io/nvidia/pytorch:26.07-py3`; on Windows the venv replaces that image (see *Python and torch* above).
+
+**Hardware.** Every number here was measured on an
+[NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/) (GB10 Grace Blackwell,
+128 GB unified, 20 cores, 48 SMs at `sm_121`).
+
+If you believe something above is missing or credited wrongly, please open an issue.
