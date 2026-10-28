@@ -34,8 +34,8 @@ ARM64——**NVIDIA RTX Spark**（GB10，128 GB 统一内存，`sm_121`）——
 | `scripts/recipe/1-install-ps1.ps1` | **配方侧**，也是唯一往 MiaAI-Lab 克隆里写东西的脚本：放 4 个 `.ps1`、把 `MODEL_PATH` 写进 `.env`，别的都不动 |
 | `scripts/Invoke-Migration.ps1` | 一键总控：先问路径，再选跑引擎侧、配方侧还是两边 |
 | `recipe/start.ps1`、`stop.ps1`、`config.ps1`、`banner.ps1` | 配方 shell 脚本的 PowerShell 版，含两个 PowerShell 5.1 的真 bug 修复（`[string]` 默认值把 `$null` 变成空串；5.1 的 `Invoke-RestMethod` 默认动词是 POST）。`config.ps1` 只有一个权重预设——FP4 那份——别的 `CHECKPOINT` 一律拒绝 |
-| `SKILL.md`、`references/` | 同一套流程的 agent 可执行形态（WorkBuddy / Claude skill 布局），外加构建笔记与验证记录 |
-| `docs/patching-and-port.md` | 长文：每份补丁怎么切出来的、踩了什么、`.sh → .ps1` 的取舍逐条 |
+| `SKILL.md`、`references/` | 同一套流程的 agent 可执行形态（WorkBuddy / Claude skill 布局），外加构建笔记与验证记录——每份都有中英双版（中文版为 `.zh-CN.md`） |
+| `docs/patching-and-port.md` | 长文：每份补丁怎么切出来的、踩了什么、`.sh → .ps1` 的取舍逐条（英文版为同名去 `.zh-CN`） |
 | `docs/bench/` | 上面那张表的 sparkDash 截图原件：decode 四种提示词 × 1–4 流、prefill 1k–128k 阶梯、质量、工具评测 |
 | `NOTICE`、`LICENSES/`、`CREDITS.md` | 许可链。二次分发前先读 `NOTICE` |
 | `VERSIONS.md` | 钉死的引擎 / 配方 / 权重 / 工具链版本、补丁哈希，以及挪动任一版本会坏在哪 |

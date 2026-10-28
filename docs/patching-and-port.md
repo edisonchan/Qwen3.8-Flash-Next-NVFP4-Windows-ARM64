@@ -1,99 +1,101 @@
-# TensorFold v1.1.4 + Qwen3.8-Flash-Next：Windows ARM64 打补丁与移植实录
+# TensorFold v1.1.4 + Qwen3.8-Flash-Next: A Field Record of Patching and Porting on Windows ARM64
 
-这份文档记录三件事，按我们实际动手的顺序：
+[English](patching-and-port.md)
 
-1. **打补丁**：怎么把"配方 17 个补丁 + Windows 兼容修复"压成可复现的三份补丁，每份怎么切、怎么验、怎么回滚。
-2. **修掉的问题**：重点是**模型加载 257 s → 71 s**（怎么定位、改了什么、撞了哪些编译坑、怎么证明没改坏），
-   以及内存准入、PowerShell 5.1 那两个让 `start.ps1` 永远报"未就绪"的真 bug。
-3. **`.sh` → `.ps1` 的改写**：Docker → 原生进程、容器日志 → 两个日志文件、`/proc/meminfo` → Win32、
-   bash 习惯 → PowerShell 5.1 等价物，逐条对照。
+This document records three things, in the order we actually did them:
 
-环境：Windows 11 ARM64 / RTX Spark N1X（GB10，sm_121，20 核，48 SMs）/ CUDA 13.4 / zig 0.17.0 / MSVC v143 ARM64。
+1. **Patching**: how the "17 recipe patches + Windows compatibility fixes" were compressed into three reproducible patches — how each was cut, verified, and rolled back.
+2. **Problems fixed**: the headline is **model load 257 s → 71 s** (how it was localized, what changed, which compile pitfalls we hit, and how we proved nothing broke),
+   plus memory admission and the two real bugs that made `start.ps1` forever report "not ready" under PowerShell 5.1.
+3. **The `.sh` → `.ps1` rewrite**: Docker → native process, container logs → two log files, `/proc/meminfo` → Win32,
+   bash habits → PowerShell 5.1 equivalents, item by item.
+
+Environment: Windows 11 ARM64 / RTX Spark N1X (GB10, sm_121, 20 cores, 48 SMs) / CUDA 13.4 / zig 0.17.0 / MSVC v143 ARM64.
 
 ---
 
-## 0. 结论速览
+## 0. Results at a glance
 
-| 项 | 值 |
+| Item | Value |
 |---|---|
-| 引擎 | `ashhart/TensorFold` @ `eab8582819688325e371907e4706e1c602b8a273`（tag v1.1.4） |
-| 配方 | `MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold` @ `fd3f43e11238553685ebb68b6d8ab2b112818e3c`（其 `patches/0001..0017`） |
-| 权重 | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ `b9ce18a6887e18c089fdea8509a33e63429a3300`（`modelopt`/`MIXED_PRECISION`，96 GB，**唯一受支持**） |
-| 工具链 | zig 0.17.0（aarch64-windows）· CUDA 13.4（`V13.4.92`）· MSVC 14.44.35207 arm64 · Windows 11 ARM64 build 10.0.28000 |
-| 补丁 | `0001`（配方 0001–0017 合并）→ `0002`（Windows/MSVC 5 处）→ `0003`（加载流水线），**顺序不能换** |
-| 工作树 | 78 项变更 = 59 修改 + 19 新增 |
-| 产物 | `TensorFold\build\native\bin\tensorfold-native.exe`（PE32+ ARM64，36 MB）、`tf-cuda-test.exe`（75 MB） |
-| 冷构建 | 5–8 分钟（`cmd /c` + `vcvarsall arm64` 内跑 `zig build native install -Dsm=121`） |
-| 模型加载 | 原生 257 s → **71 s**（引擎自报 `loaded in 67.6s`） |
-| 起服 | `.\start.ps1` → `server answered after 71s` → 冒烟 `OK` |
+| Engine | `ashhart/TensorFold` @ `eab8582819688325e371907e4706e1c602b8a273` (tag v1.1.4) |
+| Recipe | `MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold` @ `fd3f43e11238553685ebb68b6d8ab2b112818e3c` (its `patches/0001..0017`) |
+| Weights | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ `b9ce18a6887e18c089fdea8509a33e63429a3300` (`modelopt`/`MIXED_PRECISION`, 96 GB, **the only supported option**) |
+| Toolchain | zig 0.17.0 (aarch64-windows) · CUDA 13.4 (`V13.4.92`) · MSVC 14.44.35207 arm64 · Windows 11 ARM64 build 10.0.28000 |
+| Patches | `0001` (recipe 0001–0017 merged) → `0002` (Windows/MSVC, 5 spots) → `0003` (load pipeline), **the order cannot be changed** |
+| Working tree | 78 changes = 59 modified + 19 new |
+| Artifacts | `TensorFold\build\native\bin\tensorfold-native.exe` (PE32+ ARM64, 36 MB), `tf-cuda-test.exe` (75 MB) |
+| Cold build | 5–8 minutes (`zig build native install -Dsm=121` run inside `cmd /c` + `vcvarsall arm64`) |
+| Model load | native 257 s → **71 s** (engine self-reports `loaded in 67.6s`) |
+| Server start | `.\start.ps1` → `server answered after 71s` → smoke test `OK` |
 
-> 版本只有一个权威来源：[`VERSIONS.md`](../VERSIONS.md)。每处钉住的理由、挪动会坏在哪、核对命令都在那里；
-> 本文所有数字都对应上表这一组合。
+> There is exactly one authoritative source for versions: [`VERSIONS.md`](../VERSIONS.md). Why each version is pinned, what breaks if it moves, and the commands to verify it are all there;
+> every number in this document corresponds to that one combination from the table above.
 
 ---
 
-## 1. 全流程一页图
+## 1. The whole pipeline on one page
 
-| 阶段 | 动作 | 产物 / 判据 |
+| Phase | Action | Artifact / pass criterion |
 |---|---|---|
-| ⓪ 路径 | `migration.config.ps1` 探测 + 选单（root/python/zig/cuda/vcvars/model），存 `.migration.local.json` | 六行全绿 |
-| ① clone | `git clone` 引擎 + 配方，引擎检出 `eab85828` | `git rev-parse HEAD` |
-| ② 打补丁 | `0001` 配方改造 → `0002` Windows 兼容 → `0003` 加载流水线 | `git status` 78 项，两份 spot-check 绿 |
-| ③ 构建 | `cmd /c` + `vcvarsall arm64` 内跑 `zig build native install -Dsm=121` | `tensorfold-native.exe` 36 MB、`tf-cuda-test.exe` 75 MB |
-| ④ venv（可选） | `--vision` 才需要；torch 从 NVIDIA OOT 索引，再装 `tensorfold[vision]` v0.6.6 | `find_spec('tensorfold.vision.native_helper')` 返回 0 |
-| ⑤ 配方侧 | `recipe/1-install-ps1.ps1`：放 4 个 `.ps1`，写 `MODEL_PATH` 进 `.env` | 配方 `git status` 只有 `??`，无 ` M` |
-| ⑥ 起服 | `.\start.ps1`（配方目录） | `server answered after 71s` + 冒烟 `OK` |
-| ⑦ 收工 | `.\stop.ps1` | `Stopped; its GPU memory is free again` |
+| ⓪ Paths | `migration.config.ps1` probe + menu (root/python/zig/cuda/vcvars/model), saved to `.migration.local.json` | all six lines green |
+| ① Clone | `git clone` engine + recipe, engine checked out at `eab85828` | `git rev-parse HEAD` |
+| ② Patch | `0001` recipe changes → `0002` Windows compatibility → `0003` load pipeline | `git status` 78 items, both spot-checks green |
+| ③ Build | `zig build native install -Dsm=121` inside `cmd /c` + `vcvarsall arm64` | `tensorfold-native.exe` 36 MB, `tf-cuda-test.exe` 75 MB |
+| ④ venv (optional) | needed only with `--vision`; torch from the NVIDIA OOT index, then `tensorfold[vision]` v0.6.6 | `find_spec('tensorfold.vision.native_helper')` returns 0 |
+| ⑤ Recipe side | `recipe/1-install-ps1.ps1`: drop in the 4 `.ps1` files, write `MODEL_PATH` into `.env` | recipe `git status` shows only `??`, no ` M` |
+| ⑥ Start server | `.\start.ps1` (in the recipe directory) | `server answered after 71s` + smoke test `OK` |
+| ⑦ Wrap up | `.\stop.ps1` | `Stopped; its GPU memory is free again` |
 
-`prepare.sh`（拉基础镜像、编 Docker 镜像、下权重）在 Windows 上没有对应物：没有容器这一层，
-权重是本地目录，"准备"= ① clone + ② 打补丁 + ③ 构建 + venv（见 §6.7）。
+`prepare.sh` (pulling the base image, building the Docker image, downloading the weights) has no counterpart on Windows: there is no container layer,
+the weights are a local directory, and "prepare" = ① clone + ② patch + ③ build + venv (see §6.7).
 
-### 1.1 两条线：engine 与 recipe
+### 1.1 Two tracks: engine and recipe
 
-| | 仓库 | 脚本 | 动什么 |
+| | Repository | Scripts | What it touches |
 |---|---|---|---|
-| engine | `ashhart/TensorFold` | `scripts/engine/1-preflight … 6-smoke` | 三份补丁 + 构建，产出 `tensorfold-native.exe` |
-| recipe | `MiaAI-Lab/Qwen3.8-Flash-Next-…` | `scripts/recipe/1-install-ps1.ps1` | **只加文件**：4 个 `.ps1`，`.env` 里的 `MODEL_PATH` |
+| engine | `ashhart/TensorFold` | `scripts/engine/1-preflight … 6-smoke` | the three patches + the build, producing `tensorfold-native.exe` |
+| recipe | `MiaAI-Lab/Qwen3.8-Flash-Next-…` | `scripts/recipe/1-install-ps1.ps1` | **adds files only**: 4 `.ps1` files, `MODEL_PATH` in `.env` |
 
-配方的源码一行不改——这是刻意的。`1-install-ps1.ps1` 结束前自己验一遍：`git -C <配方> status --porcelain`
-应当只有 `??`（新增），没有 ` M`（修改）。`start.ps1`/`stop.ps1` 落在配方根，`config.ps1`/`banner.ps1`
-落在 `scripts\`，与 `.sh` 原件并排，随时可以删掉 `.ps1` 退回 shell 版。
+Not a single source line of the recipe is changed — this is deliberate. Before `1-install-ps1.ps1` finishes it verifies itself: `git -C <recipe> status --porcelain`
+should show only `??` (new files), no ` M` (modified). `start.ps1`/`stop.ps1` land at the recipe root, `config.ps1`/`banner.ps1`
+land in `scripts\`, side by side with the `.sh` originals; the `.ps1` files can be deleted at any time to fall back to the shell version.
 
-### 1.2 路径不写死
+### 1.2 No hard-coded paths
 
-起初文档和脚本里到处是 `D:\llm\latest`——换台机器、换个盘就全崩。现在路径只有一个来源：
-`scripts/migration.config.ps1`。
+At first the docs and scripts were full of `D:\llm\latest` — move to another machine or another drive and everything broke. Now paths come from a single source:
+`scripts/migration.config.ps1`.
 
-- **探测**：root 取本仓库所在目录（同级就是两个克隆的位置）；python 取 `PATH` → `%LOCALAPPDATA%\Programs\Python`
-  → `%ProgramFiles%`；zig 取 `PATH` → root 及其上级的 `zig*` 目录；CUDA 取 `CUDA_PATH` → toolkit 安装根（要求有
-  `bin\nvcc.exe`）；vcvars 取任意 VS 2022 安装；权重取 `MODEL_PATH` → `<root 的上级>\model\<name>`。
-- **选单**：六行编号，回车接受，数字改那一行，`?` 弹目录选择框，`d` 重新探测。接受前逐项校验
-  （zig 必须 0.17.0、nvcc 必须 13.4、python 必须 3.11+ 且 aarch64、权重必须 `modelopt`/`MIXED_PRECISION`），
-  有硬伤要求二次确认——否则失败会推迟到三步之后。
-- **固化**：确认结果写 `.migration.local.json`（git 忽略），此后每个脚本 `Get-MigConfig -Quiet` 读它，
-  再没人问第二遍。删掉它就等于"重新探测"。显式参数（`-Zig`、`-TensorFold`…）永远优先。
+- **Probe**: root is taken as the directory containing this repository (the two clones live alongside it); python from `PATH` → `%LOCALAPPDATA%\Programs\Python`
+  → `%ProgramFiles%`; zig from `PATH` → `zig*` directories under root and its parent; CUDA from `CUDA_PATH` → the toolkit install root (must contain
+  `bin\nvcc.exe`); vcvars from any VS 2022 installation; weights from `MODEL_PATH` → `<root's parent>\model\<name>`.
+- **Menu**: six numbered lines, Enter accepts, a number edits that line, `?` opens a folder picker, `d` re-probes. Before accepting, each entry is validated
+  (zig must be 0.17.0, nvcc must be 13.4, python must be 3.11+ and aarch64, weights must be `modelopt`/`MIXED_PRECISION`);
+  a hard failure requires a second confirmation — otherwise the failure gets pushed to three steps later.
+- **Freeze**: the accepted result is written to `.migration.local.json` (git-ignored); from then on every script reads it with `Get-MigConfig -Quiet`,
+  and nobody is ever asked twice. Deleting it is the same as "re-probe". Explicit parameters (`-Zig`, `-TensorFold`, …) always take priority.
 
-引擎目录与配方目录不可选：配方自己的 `config.ps1` 就是这么找同级引擎的（`<配方父目录>\TensorFold\build\...`），
-所以只有 root 是一个选项。
+The engine directory and the recipe directory are not selectable: the recipe's own `config.ps1` locates the sibling engine exactly this way (`<recipe's parent>\TensorFold\build\...`),
+so root is the only option.
 
 ---
 
-## 2. 打补丁步骤
+## 2. Patching procedure
 
-### 2.1 为什么不能直接 apply 配方那 17 个补丁
+### 2.1 Why the recipe's 17 patches cannot simply be applied
 
-配方 `TF_REF` 钉的是 v1.1.4 的 `eab85828`，但 `patches/0001..0017` 是按更早的 `db281878` 生成的。
-两者之间 `cuda_prompt*.zig`、`cuda_mtp*.zig`、`cuda_ple*.zig` 等都被上游改过，直接顺序 apply
-会**有 11 处冲突**，需要人工三方裁决——**裁决结果没法用文本表达，也就没法复现**。
+The recipe's `TF_REF` pins v1.1.4 at `eab85828`, but `patches/0001..0017` were generated against the earlier `db281878`.
+Between the two, `cuda_prompt*.zig`, `cuda_mtp*.zig`, `cuda_ple*.zig` and others were all changed upstream, so a straight sequential apply hits
+**11 conflicts** and requires manual three-way merge adjudication — **the adjudication results cannot be expressed in text, and therefore cannot be reproduced**.
 
-做法：在一份干净克隆上把 17 个补丁 `git apply --3way` 打完、人工裁决冲突，得到"**目标树 A**"；
-再开一份干净克隆（**原始树 B** = `eab85828`），把 A 里所有变更文件覆盖到 B，`git add -A`，
-`git diff --cached HEAD > 0001-...patch`。这份合并补丁就是"那次人工裁决的最终正确结果"，
-`git apply` 一次、确定性、可逐字节复现。
+The approach: on a clean clone, apply all 17 patches with `git apply --3way`, adjudicate the conflicts by hand, and get the "**target tree A**";
+then open a second clean clone (**original tree B** = `eab85828`), copy every changed file from A over to B, `git add -A`,
+`git diff --cached HEAD > 0001-...patch`. This merged patch is "the final correct result of that manual adjudication";
+`git apply` runs once, deterministically, byte-for-byte reproducible.
 
-> 代价：补丁 495 KB / 9380 行。收益：从零 clone 到可构建树只需要一条命令，不需要再裁决任何冲突。
+> The cost: a 495 KB / 9380-line patch. The payoff: from a fresh clone to a buildable tree takes one command, with no conflict adjudication left to do.
 
-### 2.2 0001：配方改造（74 文件 / 9380 行）
+### 2.2 0001: recipe changes (74 files / 9380 lines)
 
 ```powershell
 git -C TensorFold checkout --detach eab8582819688325e371907e4706e1c602b8a273
@@ -101,47 +103,47 @@ git -C TensorFold apply --check <skill>\patches\0001-recipe-0001-0017-on-v1.1.4.
 git -C TensorFold apply       <skill>\patches\0001-recipe-0001-0017-on-v1.1.4.patch
 ```
 
-它带进来的是配方对引擎的**性能改造**（fp4 引擎、系统内存缓存、双 rank、serving、prompt-expert-tile、
-fair-prefill、vision python 等），这些不是本文档的重点，但**必须全在**，否则加载路径都会不一样
-（例如 0014 的 prompt-expert-tile 会改变专家在 prompt 阶段的用法）。
+What it brings in is the recipe's **performance rework** of the engine (the fp4 engine, system-memory cache, dual rank, serving, prompt-expert-tile,
+fair-prefill, vision python, and so on). These are not the focus of this document, but they **must all be present**, or even the load path would differ
+(for example, 0014's prompt-expert-tile changes how experts are used during the prompt phase).
 
-### 2.3 0002：Windows/MSVC 兼容（5 文件 / 158 行）
+### 2.3 0002: Windows/MSVC compatibility (5 files / 158 lines)
 
-只解决"编不过"，**没有一处改 kernel 算术**。
+Solves only "won't compile"; **not a single line changes kernel arithmetic**.
 
-| # | 文件 | 症状 | 改动 | 为什么 |
+| # | File | Symptom | Change | Why |
 |---|---|---|---|---|
-| 1 | `zig/kernels/cuda/qmm_prefill.cu` | `no instance of function template "prefill_kernel" matches the specified type` | 两个显式实例化的形参加 `__restrict__` | MSVC 要求显式实例化的参数类型与模板定义**逐字匹配**（含限定符）；GCC/clang 忽略 `__restrict__`，所以上游 Linux 能编 |
-| 2 | `prefill_attention.cu` | 同上（hpattn / hpattn8） | 同上 | 同上 |
-| 3 | `gdn_prefill.cu` | 同上（chain_kernel） | 同上 | 同上 |
-| 4 | `cuda_ple_reader.zig` | `type 'void' does not support struct initialization syntax` | 匿名 `mmap` 在 Windows 分支改走 `page_allocator.alignedAlloc`；Linux 路径一字不改 | Windows 目标下 `std.posix.MAP` 是 `void`，匿名映射不存在；`PageAllocator` 底层就是 `VirtualAlloc`，同样匿名/清零/按需提交 |
-| 5 | `cuda_ple.zig` | `parameter of type 'void' not allowed in function with calling convention 'aarch64_aapcs_win'` | `Stat.now()` 改用 `std.Io.Clock.awake.now(io)`；`Ngram` 增加 `io` 字段 | 该 zig 版本已删 `std.posix.clock_gettime`；Windows 上 `std.c.CLOCK` 是 `void`；`Io.Clock` 由 std 在 Windows 上用 QPC 实现 |
+| 1 | `zig/kernels/cuda/qmm_prefill.cu` | `no instance of function template "prefill_kernel" matches the specified type` | add `__restrict__` to the formal parameters of the two explicit instantiations | MSVC requires the parameter types of an explicit instantiation to match the template definition **verbatim** (qualifiers included); GCC/clang ignore `__restrict__`, which is why upstream compiles on Linux |
+| 2 | `prefill_attention.cu` | same as above (hpattn / hpattn8) | same as above | same as above |
+| 3 | `gdn_prefill.cu` | same as above (chain_kernel) | same as above | same as above |
+| 4 | `cuda_ple_reader.zig` | `type 'void' does not support struct initialization syntax` | the anonymous `mmap` in the Windows branch is switched to `page_allocator.alignedAlloc`; the Linux path is untouched | on Windows targets `std.posix.MAP` is `void` and anonymous mappings do not exist; `PageAllocator` is `VirtualAlloc` underneath — equally anonymous/zero-filled/demand-committed |
+| 5 | `cuda_ple.zig` | `parameter of type 'void' not allowed in function with calling convention 'aarch64_aapcs_win'` | `Stat.now()` switched to `std.Io.Clock.awake.now(io)`; `Ngram` gains an `io` field | this zig version removed `std.posix.clock_gettime`; on Windows `std.c.CLOCK` is `void`; `Io.Clock` is implemented by the stdlib on Windows with QPC |
 
-`qmm_prefill.cu` 不在 0001 的 74 个文件里：上游 v1.1.4 原文就没写 `__restrict__`，配方补丁也没碰它，
-所以这是**纯粹的 MSVC 兼容问题**，与配方无关。
+`qmm_prefill.cu` is not among 0001's 74 files: the upstream v1.1.4 original never had `__restrict__`, and the recipe patches never touched it either,
+so this is a **pure MSVC compatibility problem**, unrelated to the recipe.
 
-### 2.4 0003：加载流水线（4 文件 / 441 行）
+### 2.4 0003: load pipeline (4 files / 441 lines)
 
-这份补丁不是相对 v1.1.4 切的，而是相对"**0001+0002 已应用**"的树切的——其中 `cuda_prompt.zig`、
-`cuda_prompt_wt.zig` 在 0001 里已经改过，直接对 v1.1.4 切会把 0001 的改动算进来。
+This patch was not cut against v1.1.4 but against the tree with "**0001+0002 already applied**" — `cuda_prompt.zig` and
+`cuda_prompt_wt.zig` were already modified by 0001, so cutting directly against v1.1.4 would fold 0001's changes in.
 
-切法（可照抄）：
+Cutting procedure (safe to copy verbatim):
 
 ```bash
-# 1) 造一个"0001+0002 之后"的基线，并固定住
+# 1) Build a "after 0001+0002" baseline and pin it down
 git -C TensorFold worktree add --detach <tmp> eab8582819688325e371907e4706e1c602b8a273
 git -C <tmp> apply <skill>/patches/0001-...patch
 git -C <tmp> apply <skill>/patches/0002-...patch
 git -C <tmp> commit -a -m 'baseline: 0001+0002'
 
-# 2) 把要保留的加载改动覆盖进去，diff 出来即最小增量
-cp <生产树>/{nvfp4_slice.zig,cuda_modelopt_experts.zig,cuda_prompt_wt.zig,cuda_prompt.zig} <tmp>/<对应路径>
+# 2) Copy the load changes to keep over the top; the diff is exactly the minimal increment
+cp <production tree>/{nvfp4_slice.zig,cuda_modelopt_experts.zig,cuda_prompt_wt.zig,cuda_prompt.zig} <tmp>/<corresponding paths>
 git -C <tmp> diff > 0003-load-pipeline.patch      # 4 files, +273 -35
 
-# 3) 用同一棵树验：复位成裸 eab85828，再按 0001→0002→0003 打一遍
+# 3) Verify on the same tree: reset to bare eab85828, then apply 0001→0002→0003 again
 ```
 
-验证结果（`git status --untracked-files=all` = 78 项，4 个文件与生产树 sha256 全一致）：
+Verification result (`git status --untracked-files=all` = 78 items, the 4 files match the production tree's sha256 exactly):
 
 ```
 0001 sha256 c780c9610f8550407e61ec48797e8c85d5602d984818dbd555300a61ecca80ad  applied
@@ -150,66 +152,66 @@ git -C <tmp> diff > 0003-load-pipeline.patch      # 4 files, +273 -35
 tree now: 59 files changed, 3783 insertions(+), 193 deletions(-)
 ```
 
-### 2.5 应用顺序、回滚
+### 2.5 Apply order and rollback
 
 ```powershell
-# 应用（脚本按文件名排序，天然是 0001 → 0002 → 0003）
+# Apply (the script sorts by file name, which is naturally 0001 → 0002 → 0003)
 powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\3-apply-patches.ps1 -TensorFold <root>\TensorFold
 
-# 回滚
+# Roll back
 git -C <root>\TensorFold reset --hard eab8582819688325e371907e4706e1c602b8a273
-git -C <root>\TensorFold clean -fd   # 0001 新增的 19 个未跟踪文件
-git -C <root>\TensorFold status --porcelain # 应为空
+git -C <root>\TensorFold clean -fd   # the 19 untracked files added by 0001
+git -C <root>\TensorFold status --porcelain # should be empty
 ```
 
-**顺序不可换**：0003 的上下文里有 0001 改过的行。手工 apply 时反了会直接 `--check` 失败（好事，不会半残）。
+**The order cannot be swapped**: 0003's context contains lines changed by 0001. Applying by hand in reverse fails `--check` outright (a good thing — nothing gets left half-applied).
 
 ---
 
-## 3. 修掉的问题之一：模型加载 257 s → 71 s
+## 3. Problem fixed #1: model load 257 s → 71 s
 
-这是最值得写清楚的一节。**四分钟里没有一秒钟花在 CUDA 上**，全部在 host 侧。
+This is the section most worth writing out clearly. **Not a single second of those four minutes was spent on CUDA**; it was all on the host side.
 
-### 3.1 先排除三个"合理怀疑"
+### 3.1 First, rule out three "reasonable suspects"
 
-| 怀疑 | 实测 | 结论 |
+| Suspicion | Measured | Conclusion |
 |---|---|---|
-| 磁盘慢（81 GiB 权重） | 顺序读 5.0 GB/s | 不是 IO |
-| PCIe / 拷贝带宽不够 | 单次 HtoD 20+ GB/s | 不是 DMA |
-| CUDA kernel 有问题 | 加载期 GPU 利用率很高，但**全是拷贝**、没有 kernel 在跑 | 不是 kernel |
+| Slow disk (81 GiB of weights) | sequential read 5.0 GB/s | not IO |
+| Insufficient PCIe / copy bandwidth | single HtoD 20+ GB/s | not DMA |
+| CUDA kernel problem | GPU utilization is high during loading, but it is **all copies**, no kernel running | not the kernel |
 
-三条都能用一条命令否掉，先做这一步很划算——否则会去翻 fatbin 和 `-gencode`，那是死路。
+All three can be ruled out with one command each, and doing this step first pays off — otherwise you end up poking at fatbins and `-gencode`, which is a dead end.
 
-### 3.2 真正的根因：v1.1.4 的加载路径是"现场装配"
+### 3.2 The real root cause: v1.1.4's load path assembles on the fly
 
-v1.1.4 的 Flash Next CUDA 路径**没有预量化缓存**：每层都从原始 safetensors 读 NVFP4 专家，
-现场重排成引擎要的布局再上传。旧实现（`cuda_modelopt_experts.zig` 的 `loadShape`）是：
+v1.1.4's Flash Next CUDA path has **no pre-quantized cache**: every layer reads the NVFP4 experts from the raw safetensors,
+re-packs them on the fly into the layout the engine wants, then uploads. The old implementation (`loadShape` in `cuda_modelopt_experts.zig`) was:
 
 ```zig
-for (0..512) |i| {                                            // 一层 512 个专家
-    var gate   = try readPart(a, store, "…gate_proj", ...);   // 小拷贝 1
-    var value  = try readPart(a, store, "…up_proj",   ...);   // 小拷贝 2
-    var output = try readPart(a, store, "…down_proj", ...);   // 小拷贝 3
-    ex.packGateUp(...); ex.packOne(...);                      // 单线程重打包
-    try up.upload(); try down.upload();                       // 每次 upload 后 stream.synchronize()
+for (0..512) |i| {                                            // 512 experts per layer
+    var gate   = try readPart(a, store, "…gate_proj", ...);   // small copy 1
+    var value  = try readPart(a, store, "…up_proj",   ...);   // small copy 2
+    var output = try readPart(a, store, "…down_proj", ...);   // small copy 3
+    ex.packGateUp(...); ex.packOne(...);                      // single-threaded repacking
+    try up.upload(); try down.upload();                       // stream.synchronize() after every upload
 }
 ```
 
-一层 = 512 × 3 = 1536 次小拷贝 + 512 次同步；48 层 = 24576 个专家。但真正把时间放大到 4 分钟的是三个隐含成本：
+One layer = 512 × 3 = 1536 small copies + 512 synchronizations; 48 layers = 24,576 experts. But what actually blew the time up to four minutes were three implicit costs:
 
-| 放大器 | 具体 | 代价 |
+| Amplifier | Detail | Cost |
 |---|---|---|
-| **串行** | 一次只有一个核在打包；CPU 打包与 DMA 完全互斥 | 20 核只用 1 核 |
-| **映射缓存只有 2 槽** | `Store.released: [2]Held`，而**一层专家散在 14 个 shard 里** | 每层反复 close/reopen 分片、重新解析头部（全模型头 50.6 MB，单文件最大 9.3 MB） |
-| **逐行 memcpy** | `core/nvfp4_slice.zig` 的 `slice()` 一行一次 `@memcpy` | 一层几千行，占读耗时约 1/3 |
+| **Serial** | only one core packs at a time; CPU packing and DMA are fully mutually exclusive | 1 of 20 cores used |
+| **Mapping cache has only 2 slots** | `Store.released: [2]Held`, yet **one layer's experts are scattered across 14 shards** | every layer repeatedly closes/reopens shards and re-parses headers (50.6 MB of headers model-wide, up to 9.3 MB in a single file) |
+| **Line-by-line memcpy** | `slice()` in `core/nvfp4_slice.zig` does one `@memcpy` per row | thousands of rows per layer, about 1/3 of read time |
 
-Windows 上第二个放大器更贵：`cuda_ple_reader.zig` 的 Windows 分支用 `PageAllocator`（`VirtualAlloc`）
-而不是 `mmap`，分片元数据每次重开都要重新解码一遍，没有 page cache 兜底。
+On Windows the second amplifier is even more expensive: the Windows branch of `cuda_ple_reader.zig` uses `PageAllocator` (`VirtualAlloc`)
+instead of `mmap`, so shard metadata is fully re-decoded on every reopen, with no page cache as a backstop.
 
-### 3.3 解决步骤（按实际动手顺序）
+### 3.3 Fix steps (in the order actually done)
 
-**第 1 步：先埋点，别先改。** 没有分段数据就只能靠猜。在 `fill()`（原来逐专家循环所在处）加三个累计计数器：
-`pack`（打包墙钟）、`stage wait`（等 stage 可用）、每层总耗时：
+**Step 1: instrument first, don't change anything yet.** Without per-segment data you can only guess. Add three cumulative counters in `fill()` (where the per-expert loop used to be):
+`pack` (packing wall-clock), `stage wait` (waiting for a stage to become available), and per-layer total time:
 
 ```zig
 const threads = @max(1, @min(envNumber("TENSORFOLD_LOAD_THREADS") orelse (std.Thread.getCpuCount() catch 4), max_threads));
@@ -218,51 +220,51 @@ if (stats) std.log.info("flashnext: {d} experts in {d} groups of {d} on {d} thre
     .{ count, g, group, threads, packed_ns / 1_000_000, waited_ns / 1_000_000, (up_bytes + down_bytes) * count >> 20 });
 ```
 
-> **坑**：变量名必须是 `TENSORFOLD_` 前缀。`scripts\config.ps1` 只把 `.env` 里出现的 key 导进进程环境，
-> 写 `TF_LOAD_STATS` 会静默失效（我第一版就是这么白跑一轮的）。日志落在 `build\logs\serve-*.err.log`
-> （`info:` 行，stderr），不是 `.out.log`，且含 NUL 字节，要 `grep -a` 或 `Get-Content -Encoding Default`。
+> **Pitfall**: the variable names must carry the `TENSORFOLD_` prefix. `scripts\config.ps1` only exports keys that appear in `.env` into the process environment,
+> so writing `TF_LOAD_STATS` silently does nothing (my first version wasted a whole run this way). The logs land in `build\logs\serve-*.err.log`
+> (the `info:` lines, stderr), not `.out.log`, and they contain NUL bytes, so use `grep -a` or `Get-Content -Encoding Default`.
 
-**第 2 步：把映射缓存从 2 槽扩到 48 槽，并让它线程安全。** 一层跨 14 个分片，48 槽够放三层，
-整层加载期间不再 close/reopen。并行读之后 `Store` 会被多线程同时借用，三处必须处理：
+**Step 2: grow the mapping cache from 2 slots to 48 and make it thread-safe.** One layer spans 14 shards, and 48 slots can hold three layers,
+so there is no more close/reopen during a layer load. Once reads run in parallel, `Store` gets borrowed by multiple threads at once, so three things must be handled:
 
 ```zig
 pub const cached_shards: usize = 48;
-mtx: std.Io.Mutex = .init,          // zig 0.17 已删 std.Thread.Mutex
+mtx: std.Io.Mutex = .init,          // zig 0.17 removed std.Thread.Mutex
 
-// 1) 借用簿记串行化，但 IO 在锁外（锁只护几十字节的指针记录）
+// 1) Serialize the borrowing bookkeeping, but keep IO outside the lock (the lock guards only tens of bytes of pointer records)
 self.mtx.lockUncancelable(self.io);
 defer self.mtx.unlock(self.io);
 
-// 2) 槽满时把"已归还"的映射扫进缓存，绝不 close 正在借出的映射
+// 2) When slots are full, sweep "returned" mappings into the cache; never close a mapping that is currently borrowed
 if (self.nheld == self.held.len) self.releaseLocked();
 
-// 3) 48 层读完后一次性释放（回收约 0.6 GB 解析过的头部）
+// 3) Release everything once all 48 layers are read (reclaims about 0.6 GB of parsed headers)
 pub fn dropShards(self: *Store) void { ... releaseLocked(); closeFileLocked(); closeReleasedLocked(); }
 ```
 
-**第 3 步：分组并行 + pinned 双缓冲 + 事件回压。** 这是提速主力。512 个专家切成 32 组 × 16 个，
-两组 stage（A/B）交替：一组在打包，另一组正在被 DMA 读，谁都不用等谁。
+**Step 3: grouped parallelism + pinned double buffering + event backpressure.** This is the main speedup. The 512 experts are cut into 32 groups × 16,
+with two stage buffers (A/B) alternating: one group is being packed while the other is being read by DMA, so neither waits on the other.
 
 ```
-时间轴 ─────────────────────────────────────────────────────────────▶
-打包(20线程)  [组1 ][组2 ][组3 ][组4 ] ...   每组约 22 ms
-异步DMA           [1]  [2]  [3]  [4]  ...    每组约 2 ms，整个落在下一组的打包窗口里
+Timeline ────────────────────────────────────────────────────────────▶
+Packing (20 threads)  [gr1 ][gr2 ][gr3 ][gr4 ] ...   about 22 ms per group
+Async DMA                 [1]  [2]  [3]  [4]  ...    about 2 ms per group, entirely inside the next group's packing window
 ```
 
-要点四条，缺一条收益就掉：
+Four essentials; drop even one and the gains shrink:
 
-- **按"组"切，不按"专家一线程"**：DMA 投递有固定开销，一次 42 MiB 的拷贝远优于 16 次 2.6 MiB；
-  逐专家投递会产生 1536 次 ioctl/层，开销比数据本身还大。
-- **原子取号，不做静态分片**：512/20 不整除，静态分片会出现 26 : 22 的长尾；取号让跑得快的线程多干。
-- **pinned 是硬要求**：`cuMemHostAlloc`（`cuda.HostBuffer`）拿 page-locked 内存。普通可分页内存调
-  `cuMemcpyHtoDAsync`，驱动会退回"临时固定缓冲 + 同步拷贝"，双缓冲白做。
-- **event 回压不能省**：每个 stage 一个 `cuda.Event`，复用前 `synchronize()`。少了它，下一组会覆写
-  正在被 DMA 读的 stage；只用一次 `sync` 又会让 20 个线程集体卡住。
+- **Cut by "groups", not "one thread per expert"**: DMA submission has fixed overhead; one 42 MiB copy is far better than 16 copies of 2.6 MiB;
+  per-expert submission would produce 1536 ioctls per layer, with overhead larger than the data itself.
+- **Atomic ticket-taking, no static partitioning**: 512/20 does not divide evenly, and static partitioning produces a 26 : 22 long tail; ticket-taking lets faster threads do more.
+- **Pinned memory is a hard requirement**: `cuMemHostAlloc` (`cuda.HostBuffer`) gets page-locked memory. Calling
+  `cuMemcpyHtoDAsync` on ordinary pageable memory makes the driver fall back to "temporary staging buffer + synchronized copy", making the double buffering pointless.
+- **Event backpressure must not be skipped**: one `cuda.Event` per stage, `synchronize()` before reuse. Without it, the next group overwrites
+  the stage currently being read by DMA; using just one `sync` instead would leave all 20 threads stalled together.
 
 ```zig
 const Job = struct {
-    next: std.atomic.Value(usize) = .init(0),   // 抢号
-    stop: std.atomic.Value(bool)  = .init(false),  // 一个失败，全部收手
+    next: std.atomic.Value(usize) = .init(0),   // take a ticket
+    stop: std.atomic.Value(bool)  = .init(false),  // one failure, everyone backs off
     fn pack(self: *Job, i: usize, a: std.mem.Allocator) !void { ... }
 };
 
@@ -272,45 +274,45 @@ fn enqueue(d: *const cuda.Driver, dst: u64, src: []const u8, stream: cuda.abi.St
 }
 ```
 
-**第 4 步：整块 memcpy。** `slice()` 里加一个整宽判定，几千次 `@memcpy` 变一次：
+**Step 4: one whole-block memcpy.** Add a whole-width check in `slice()`, turning thousands of `@memcpy` calls into one:
 
 ```zig
 const whole = inputs.from == 0 and inputs.to == d.k;
 if (whole) {
     @memcpy(codes[0 .. n * (d.k / 2)], source.weight.bytes[rows.from * (d.k / 2) ..][0 .. n * (d.k / 2)]);
-} else for (0..n) |row| { ...逐行... };
+} else for (0..n) |row| { ...line by line... };
 ```
 
-**第 5 步：加载完把映射全部放掉**（`dropShards()`），否则 0.6 GB 头内存一直挂着。
+**Step 5: release all mappings once loading finishes** (`dropShards()`), otherwise 0.6 GB of header memory stays resident.
 
-### 3.4 顺手撞到的 4 个 zig 0.17 编译坑
+### 3.4 Four zig 0.17 compile pitfalls hit along the way
 
-| 报错 | 原因 | 改法 |
+| Error | Cause | Fix |
 |---|---|---|
-| `root source file struct 'Thread' has no member named 'Mutex'` | 0.17 删了 `std.Thread.Mutex` | 用 `std.Io.Mutex = .init`，`lockUncancelable(io)` / `unlock(io)` |
-| `expected type 'u64', found 'i96'` | `Clock.Timestamp.toNanoseconds()` 返回 **i96** | `@intCast(u64)`；外层再 `@as(u64, @intCast(...))` |
-| `expected type '[]u32', found '[]align(1) u32'` | `bytesAsSlice(u32, []u8)` 得到 1 字节对齐 | 先 `const w: []align(4) u8 = @alignCast(slot);` 再 `bytesAsSlice(u32, w)` |
-| `expected type 'mem.Allocator', found '*const driver.Driver'` | 我把 `loadShape(store: anytype)` 强转成 `*wt.Store`，破坏了测试用的内存 mock | 每专家逻辑收进 `packExpert(store: anytype)`；并行只在 `@TypeOf(store) == *wt.Store` 时启用，mock 走串行 |
+| `root source file struct 'Thread' has no member named 'Mutex'` | 0.17 removed `std.Thread.Mutex` | use `std.Io.Mutex = .init`, `lockUncancelable(io)` / `unlock(io)` |
+| `expected type 'u64', found 'i96'` | `Clock.Timestamp.toNanoseconds()` returns **i96** | `@intCast(u64)`; wrap the outer layer too with `@as(u64, @intCast(...))` |
+| `expected type '[]u32', found '[]align(1) u32'` | `bytesAsSlice(u32, []u8)` yields 1-byte alignment | first `const w: []align(4) u8 = @alignCast(slot);`, then `bytesAsSlice(u32, w)` |
+| `expected type 'mem.Allocator', found '*const driver.Driver'` | I force-cast `loadShape(store: anytype)` to `*wt.Store`, breaking the in-memory mock used by tests | the per-expert logic was moved into `packExpert(store: anytype)`; parallelism is enabled only when `@TypeOf(store) == *wt.Store`, so mocks stay on the serial path |
 
-### 3.5 怎么证明"快得没把权重装错"
+### 3.5 Proving "it got faster without loading the weights wrong"
 
-并行 + 复用缓冲最容易出的错是**静默错位**：模型照样起得来、`/health` 照样 ok、输出是胡话。所以做了三层：
+The easiest mistake with parallelism + buffer reuse is **silent misalignment**: the model still starts, `/health` is still ok, and the output is gibberish. So three layers were put in place:
 
-1. **回归护栏**：`loadShape` 只在 `@TypeOf(store) == *wt.Store` 时走并行，单元测试的内存 mock 仍走原串行路径；
-   `fill()` 里任何分配失败都打 warn 自动退回 `serial()`，不会让加载整体失败。
-2. **确定性问答**：`capital of France` → `Paris`。比只看 `/health` 有效得多。
-3. **指标判读**：`stage wait` 是"双缓冲够不够"的唯一直接指标，实测合计 0.87 s / 67.6 s；哪天它涨到 5%，
-   先怀疑组太小（调 `TENSORFOLD_LOAD_GROUP`），而不是去改 CUDA。
+1. **Regression guardrail**: `loadShape` takes the parallel path only when `@TypeOf(store) == *wt.Store`; the unit tests' in-memory mock still
+   takes the original serial path; any allocation failure in `fill()` logs a warn and automatically falls back to `serial()` without failing the whole load.
+2. **Deterministic Q&A**: `capital of France` → `Paris`. Far more effective than just watching `/health`.
+3. **Metric reading**: `stage wait` is the only direct indicator of whether the double buffering is sufficient; measured total 0.87 s / 67.6 s; if it ever
+   climbs to 5%, first suspect the group is too small (tune `TENSORFOLD_LOAD_GROUP`) rather than touching CUDA.
 
-### 3.6 结果
+### 3.6 Results
 
-| 项 | 原生 v1.1.4 | 打 0003 之后 |
+| Item | native v1.1.4 | after 0003 |
 |---|---|---|
-| 整机加载 | 257 s | **71 s**（引擎自报 67.6 s） |
-| 每层 | 约 5.0 s | **1.12 s** |
-| 拷贝等待 | 每层 3 次全同步 | **18 ms/层**（合计 0.87 s，占 1.3%） |
+| Whole-machine load | 257 s | **71 s** (engine self-reports 67.6 s) |
+| Per layer | about 5.0 s | **1.12 s** |
+| Copy wait | 3 full syncs per layer | **18 ms/layer** (0.87 s total, 1.3%) |
 
-48 层分段（`TENSORFOLD_LOAD_STATS=1`）：
+Per-layer breakdown over the 48 layers (`TENSORFOLD_LOAD_STATS=1`):
 
 ```
 layer N took   n=48  sum=53564 ms  mean=1116  median=1130  min=886  max=1275
@@ -318,50 +320,50 @@ pack           n=49  sum=34222 ms  mean= 698  median= 706  min=527  max= 793
 stage wait     n=49  sum=  871 ms  mean=  17.8 max=   49
 ```
 
-- `pack` 占 34.2 s = **新的瓶颈**：单专家 3 投影约 27 CPU-ms（698 ms × 20 线程 ÷ 512），20 核已全用满。
-- 48 层合计 53.6 s，占总加载 79%；剩下 ~14 s 是 embedding / lm_head / FP8 n-gram 表 / attention 共享权重。
-- `pack` 是 49 行不是 48：层循环之后还有一次同样规模的装配（紧跟 prompt-expert tile 初始化），它不计入层耗时。
+- `pack` accounts for 34.2 s = **the new bottleneck**: about 27 CPU-ms per expert for the 3 projections (698 ms × 20 threads ÷ 512); all 20 cores are already fully used.
+- The 48 layers total 53.6 s, 79% of the whole load; the remaining ~14 s are embedding / lm_head / the FP8 n-gram table / attention shared weights.
+- `pack` has 49 lines, not 48: after the layer loop there is one more assembly of the same size (right after prompt-expert tile initialization), and it is not counted in the layer timings.
 
-**还能不能再快**：只有一条路——**跳过重打包**，写一次性工具把 checkpoint 预处理成引擎原生专家 blob
-（首次约 10 分钟 + 约 80 GB 磁盘），之后加载退化为纯读 + DMA，估算 20 s。这属于新功能（新增产物、
-新增缓存失效逻辑），不要顺手塞进补丁。
+**Can it get any faster**: there is exactly one way — **skip the repacking**, write a one-off tool to preprocess the checkpoint into engine-native expert blobs
+(about 10 minutes the first time + about 80 GB of disk), after which loading degenerates into pure read + DMA, estimated at 20 s. That is new functionality (a new artifact,
+new cache-invalidation logic); do not slip it into the patch.
 
 ---
 
-## 4. 修掉的问题之二：内存准入与 `PARALLEL`
+## 4. Problem fixed #2: memory admission and `PARALLEL`
 
-现象：48 层全部加载完之后，进程报错退出，日志最后一行是
+Symptom: after all 48 layers finished loading, the process exited with an error, and the last log line was
 
 ```
 --parallel 5 needs 23.74 GiB (5 streams at a 262,144-token window); 22.81 GiB left after a 4.0 GiB reserve
 ```
 
-这不是加载问题，是**准入预算**：整机统一内存只有 30.5 GB（加载前 host 可用 16 GiB），权重 81 GiB 和 KV
-都从驱动的 98 GiB GPU pool 里出，引擎再自己留 `TENSORFOLD_MEMORY_RESERVE_GIB`。fp8 KV 每流 4.75 GiB：
+This is not a loading problem; it is the **admission budget**: the machine has only 30.5 GB of unified memory (16 GiB of host memory available before loading), the 81 GiB of weights and the KV
+both come out of the driver's 98 GiB GPU pool, and the engine additionally keeps its own `TENSORFOLD_MEMORY_RESERVE_GIB`. fp8 KV costs 4.75 GiB per stream:
 
-| 流数 | KV 需求 | 4 GiB 预留后的预算 | 结果 |
+| Streams | KV demand | Budget after the 4 GiB reserve | Result |
 |---|---|---|---|
-| 5 | 23.74 GiB | 22.81 GiB | 差 0.93 GiB，加载完才报错退出 |
-| 4 | 18.96 GiB | 22.81 GiB | 正常起服 |
+| 5 | 23.74 GiB | 22.81 GiB | short by 0.93 GiB; exits with an error only after loading completes |
+| 4 | 18.96 GiB | 22.81 GiB | server starts normally |
 
-处置：`.env` 里固定 `PARALLEL=4`。要 5 流有两条路——把 `CONTEXT` 降到 131072，或者移植旧补丁 0010 的
-indexer-key 环形缓存（每流省 ~0.88 GiB）。**注意这个错误只在加载完成后才出现**，看日志时别以为又是加载慢。
+Resolution: pin `PARALLEL=4` in `.env`. There are two ways to get 5 streams — drop `CONTEXT` to 131072, or port the
+indexer-key ring buffer from old patch 0010 (saves about 0.88 GiB per stream). **Note that this error only appears after loading completes**; when reading logs, don't assume loading is slow again.
 
 ---
 
-## 5. 修掉的问题之三：PowerShell 5.1 让 `start.ps1` 永远报"未就绪"
+## 5. Problem fixed #3: PowerShell 5.1 made `start.ps1` forever report "not ready"
 
-加载变快之后仍报 `the server exited before it was ready`，但日志显示服务明明起来了、手动请求 `/health`
-也正常。根因是 `config.ps1` 的健康探测在 PS 5.1 下**每轮都抛异常**，`while` 循环永远等不到 `$ready`。
+Even after loading got faster it still reported `the server exited before it was ready`, yet the logs clearly showed the server had started and manual requests to `/health`
+worked fine. The root cause: `config.ps1`'s health probe **threw an exception every single round** under PS 5.1, so the `while` loop never reached `$ready`.
 
-两个真 bug：
+Two real bugs:
 
-| 症状 | 根因 | 修法 |
+| Symptom | Root cause | Fix |
 |---|---|---|
-| `无法发送具有此谓词类型的内容正文` | `param([string]$Body = $null)` 里 `$null` 会变空串，`$null -ne $Body` **恒真**；空 body 走 GET，而 **PS 5.1 的 `Invoke-RestMethod` 默认动词是 POST**（6.0+ 才是 GET），空 body 的 POST 直接被拒 | 用 `[string]::IsNullOrEmpty($Body)` 判空，并且**每个分支都显式传 `-Method`** |
-| `找不到与参数名称"NoProxy"匹配的参数` | `-NoProxy` 是 PowerShell 6.0+ 才有的开关 | 5.1 分支改用 `[System.Net.WebRequest]::DefaultWebProxy = $null` 包 `try/finally` |
+| `无法发送具有此谓词类型的内容正文` (cannot send a content body with this verb type) | in `param([string]$Body = $null)`, `$null` becomes an empty string, so `$null -ne $Body` is **always true**; an empty body goes down the GET path, but **PS 5.1's `Invoke-RestMethod` defaults to the POST verb** (only 6.0+ defaults to GET), and a body-less POST is rejected outright | test emptiness with `[string]::IsNullOrEmpty($Body)`, and **pass `-Method` explicitly on every branch** |
+| `找不到与参数名称"NoProxy"匹配的参数` (no parameter matches the parameter name "NoProxy") | `-NoProxy` is a switch that only exists in PowerShell 6.0+ | on the 5.1 branch use `[System.Net.WebRequest]::DefaultWebProxy = $null` wrapped in `try/finally` |
 
-修好的版本（`scripts\config.ps1`）：
+The fixed version (`scripts\config.ps1`):
 
 ```powershell
 function Invoke-LocalRest {
@@ -380,9 +382,9 @@ function Invoke-LocalRest {
 }
 ```
 
-顺带两个同源坑：`config.ps1` 已把 `ApiUrl` 映射到 `127.0.0.1`，所以 `HOST=0.0.0.0` 没问题，但
-**`0.0.0.0` 不能直接当 HTTP 目标**；另外进程里同时存在 `HTTPS_PROXY` 和 `https_proxy` 时，
-`Get-ChildItem Env:` 会抛"已添加了具有相同键的项"，连带 `Start-Process` 失败——启动前把两套名字都清掉：
+Two pitfalls from the same root along the way: `config.ps1` already maps `ApiUrl` to `127.0.0.1`, so `HOST=0.0.0.0` is fine, but
+**`0.0.0.0` cannot be used directly as an HTTP target**; also, when both `HTTPS_PROXY` and `https_proxy` exist in the process environment,
+`Get-ChildItem Env:` throws "Item has already been added. Key in dictionary" (已添加了具有相同键的项), taking `Start-Process` down with it — clear both spellings before launching:
 
 ```powershell
 foreach ($n in 'HTTPS_PROXY','https_proxy','HTTP_PROXY','http_proxy','ALL_PROXY','all_proxy') {
@@ -392,44 +394,44 @@ foreach ($n in 'HTTPS_PROXY','https_proxy','HTTP_PROXY','http_proxy','ALL_PROXY'
 
 ---
 
-## 6. `.sh` → `.ps1` 的改写
+## 6. The `.sh` → `.ps1` rewrite
 
-### 6.1 文件对照
+### 6.1 File mapping
 
-这四份是**唯一进入配方仓库**的文件，由 `scripts\recipe\1-install-ps1.ps1` 拷贝：
+These four files are the **only ones that enter the recipe repository**, copied there by `scripts\recipe\1-install-ps1.ps1`:
 
-| Linux（配方原版） | Windows（本机） | 说明 |
+| Linux (recipe original) | Windows (this machine) | Notes |
 |---|---|---|
-| `start.sh`（259 行） | `start.ps1`（308 行） | 5 步流程一一对应，启动方式从 Docker 换成本机进程 |
-| `stop.sh`（24 行） | `stop.ps1`（19 行） | `docker stop/rm` → 按 pid 文件杀进程（含孤儿兜底） |
-| `scripts/config.sh`（201 行） | `scripts/config.ps1`（246 行） | 默认值、`.env`、内存/KV 计算、探测辅助函数 |
-| `scripts/banner.sh`（28 KB 终端画） | `scripts/banner.ps1`（1.4 KB） | **不复制**画面，运行时用正则从 `banner.sh` 抽 |
+| `start.sh` (259 lines) | `start.ps1` (308 lines) | the 5-step flow maps one to one; launch changed from Docker to a native process |
+| `stop.sh` (24 lines) | `stop.ps1` (19 lines) | `docker stop/rm` → kill the process by pid file (with an orphan backstop) |
+| `scripts/config.sh` (201 lines) | `scripts/config.ps1` (246 lines) | defaults, `.env`, memory/KV computation, probe helper functions |
+| `scripts/banner.sh` (28 KB terminal art) | `scripts/banner.ps1` (1.4 KB) | **does not copy** the artwork; extracts it from `banner.sh` at runtime via regex |
 
-剩下这些**留在 skill 目录**，只在需要时被调用一次，不进配方（配方仓库因此保持 `0 modified`）：
+The rest stay **in the skill directory**, invoked once only when needed, and never enter the recipe (which is why the recipe repository stays at `0 modified`):
 
-| Linux（配方原版） | Windows（本机） | 说明 |
+| Linux (recipe original) | Windows (this machine) | Notes |
 |---|---|---|
-| `scripts/prepare.sh`（14.6 KB） | `scripts\engine\` 下 1–6 | 它做的是「拉镜像 + 装依赖 + 下 zig + 打补丁 + 编译 + 下权重 + `docker build`」，Windows 上拆成六个可单独重跑的步骤，见 §1 的流程表 |
-| `Dockerfile` 里 `ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.07-py3` | `scripts\engine\4-venv.ps1` | **容器自带 torch，本机没有** → 在配方目录里建 `venv` 并装 torch（vision 才需要，见下节） |
-| `pip install tensorfold[vision]`（在镜像里做） | 同上，`4-venv.ps1` 第二步 | 先 torch 后 `tensorfold[vision] @ v0.6.6`，顺序不能反 |
+| `scripts/prepare.sh` (14.6 KB) | steps 1–6 under `scripts\engine\` | it does "pull image + install deps + download zig + patch + compile + download weights + `docker build`"; on Windows this splits into six individually re-runnable steps, see the pipeline table in §1 |
+| `Dockerfile`'s `ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.07-py3` | `scripts\engine\4-venv.ps1` | **the container ships torch; this machine has none** → create a `venv` in the recipe directory and install torch (only needed for vision, see the next section) |
+| `pip install tensorfold[vision]` (done inside the image) | same as above, second step of `4-venv.ps1` | torch first, then `tensorfold[vision] @ v0.6.6`; the order cannot be reversed |
 
-### 6.1.1 torch 与 venv：容器里白拿的东西，本机得自己装
+### 6.1.1 torch and the venv: what the container gave you for free, this machine must install itself
 
-Linux 那条路根本没"装 torch"这一步——`nvcr.io/nvidia/pytorch:26.07-py3` 里已经有一份和
-CUDA 13.4 对得上的 build。Windows 上没有任何轮子能直接用，所以要在**配方目录**里建 venv：
+The Linux path has no "install torch" step at all — `nvcr.io/nvidia/pytorch:26.07-py3` already ships a build
+that matches CUDA 13.4. On Windows no wheel works out of the box, so a venv must be created in the **recipe directory**:
 
 ```
 <root>\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold\venv\
 ```
 
-之所以必须在配方目录，是因为 `recipe\config.ps1` 自己就是这么找的：
+The reason it must live in the recipe directory is that `recipe\config.ps1` looks for it exactly this way:
 
 ```powershell
 $VenvDir      = Get-Setting 'VENV_DIR'      (Join-Path $RecipeDir 'venv')
 $VisionPython = Get-Setting 'TENSORFOLD_VISION_PYTHON' (Join-Path $VenvDir 'Scripts\python.exe')
 ```
 
-`start.ps1` 里那一段（`--vision` 时才走）：
+The corresponding part in `start.ps1` (taken only with `--vision`):
 
 ```powershell
 if (-not (Test-Path $VisionPython)) { Die "vision is on but the venv python is missing: $VisionPython (set VENV_DIR or VISION=0)" }
@@ -437,78 +439,78 @@ if (-not (Test-Path $VisionPython)) { Die "vision is on but the venv python is m
 Set-EnvVar 'TENSORFOLD_VISION_PYTHON' $VisionPython
 ```
 
-所以 `venv` 默认落在配方目录；真要搬走，`.env` 里给 `VENV_DIR` 就行（`start.ps1` 会跟着改
-`TENSORFOLD_VISION_PYTHON`），但 `4-venv.ps1` 的默认值也是这个位置，两边别改岔了。
+So `venv` defaults to the recipe directory; to really move it, set `VENV_DIR` in `.env` (`start.ps1` will follow by updating
+`TENSORFOLD_VISION_PYTHON`), but `4-venv.ps1`'s default is the same location — don't change one side and not the other.
 
-两条命令，**顺序不能换**：
+Two commands, **the order cannot be swapped**:
 
 ```powershell
-# 1) torch 必须走 NVIDIA 的 nightly 索引，PyPI 上的 arm64 wheel 对不上 CUDA 13.4
+# 1) torch must come from NVIDIA's nightly index; the arm64 wheels on PyPI do not match CUDA 13.4
 python -m pip install --pre --upgrade --only-binary=:all: `
   --extra-index-url 'https://pypi.nvidia.com/nvtorch_oot_nightly' torch torchvision torchaudio
 
-# 2) 再装带 vision 的 tensorfold（0.6.6 才带 native_helper）
+# 2) then install tensorfold with vision (only 0.6.6 ships native_helper)
 python -m pip install "tensorfold[vision] @ git+https://github.com/ashhart/TensorFold.git@v0.6.6"
 ```
 
-反过来的话，第 2 步会把 PyPI 的普通 `torch` 当依赖拉进来，装完 `cuda.is_available()` 是 `False`，
-而且不会报错——只有真跑 `--vision` 时才炸。`4-venv.ps1` 就是按这个顺序写的，并且装完会回读
-`torch.__version__` / `torch.version.cuda` / `cuda.is_available()` 和
-`find_spec('tensorfold.vision.native_helper')`，不绿就不算完成。
+In reverse, step 2 would pull in the plain PyPI `torch` as a dependency; after installing, `cuda.is_available()` is `False`,
+and nothing errors — it only blows up when you actually run `--vision`. `4-venv.ps1` is written in exactly this order, and after installing it reads back
+`torch.__version__` / `torch.version.cuda` / `cuda.is_available()` and
+`find_spec('tensorfold.vision.native_helper')`; it doesn't count as done until everything is green.
 
-### 6.2 结构性差异（六处，决定了后面所有改写）
+### 6.2 Structural differences (six of them, which dictate every rewrite that follows)
 
-| 维度 | Linux 原版 | Windows 版 |
+| Dimension | Linux original | Windows version |
 |---|---|---|
-| 运行载体 | `docker run -d --gpus all --ipc=host --network host` | `Start-Process tensorfold-native.exe`，直接跑在宿主 |
-| 模型路径 | HF cache 快照挂到 `/root/.cache/huggingface`，用 `/root/...` 路径传参 | 本地目录（选单第 6 项），`MODEL_PATH` 直接传，由 `1-install-ps1.ps1` 写进配方 `.env` |
-| 日志 | `docker logs -f`（一个流） | 两个文件 `serve-*.out.log` / `serve-*.err.log`，用 `StreamReader` 轮询 |
-| 单实例保护 | `flock -n 8` 独占锁文件 | pid 文件 + 端口监听探测（`flock` 在 Windows 无等价物） |
-| 停止 | `docker stop -t N` 再 `docker rm -f` | `Stop-Process -Force` + 轮询到期；再按 exe 路径 / LISTEN socket 找孤儿 |
-| 预检"参数合法吗" | `docker run --rm ... serve /nonexistent` 跑一次引擎 | 直接 `& $env:ComSpec /c "exe serve /nonexistent ..."` 跑一次 |
+| Runtime carrier | `docker run -d --gpus all --ipc=host --network host` | `Start-Process tensorfold-native.exe`, running directly on the host |
+| Model path | HF cache snapshot mounted at `/root/.cache/huggingface`, passed as a `/root/...` path | a local directory (menu item 6), `MODEL_PATH` passed directly, written into the recipe's `.env` by `1-install-ps1.ps1` |
+| Logs | `docker logs -f` (one stream) | two files `serve-*.out.log` / `serve-*.err.log`, polled with `StreamReader` |
+| Single-instance protection | `flock -n 8` exclusive lock file | pid file + port-listening probe (`flock` has no Windows equivalent) |
+| Stop | `docker stop -t N` then `docker rm -f` | `Stop-Process -Force` + poll until deadline; then hunt orphans by exe path / LISTEN socket |
+| Pre-check "are the arguments valid" | `docker run --rm ... serve /nonexistent`, running the engine once | run it once directly via `& $env:ComSpec /c "exe serve /nonexistent ..."` |
 
-### 6.3 逐项改写对照
+### 6.3 Item-by-item rewrite mapping
 
 | Bash | PowerShell 5.1 |
 |---|---|
-| `set -euo pipefail` | `$ErrorActionPreference = 'Stop'`（**注意**：原生程序 stderr 会被当成错误，见 §6.6） |
+| `set -euo pipefail` | `$ErrorActionPreference = 'Stop'` (**note**: native-program stderr is treated as an error, see §6.6) |
 | `cd "$(dirname "$(readlink -f "$0")")"` | `Set-Location $PSScriptRoot` |
 | `source ./scripts/config.sh` | `. (Join-Path $PSScriptRoot 'scripts\config.ps1')` + `$script:SelfName = 'start.ps1'` |
-| `usage() { awk 'NR>1 && /^#/...' "$0"; }` | 读自身 `<# ... #>` 注释块后 `-replace '^# ?',''` |
-| `(( 1 <= 12 ))` 算术判断 | `[int]` 转换 + `-lt/-gt/-eq/-in` |
-| `"${!name}"` 间接取值 | `[Environment]::GetEnvironmentVariable($name, 'Process')` |
-| `export FOO=1`（给子进程） | `[Environment]::SetEnvironmentVariable('FOO','1','Process')` |
-| `env \| grep -E '^(TENSORFOLD\|TF_FLASHNEXT)_'` 收集 `-e` 参数 | 不需要：进程环境天然被子进程继承（`Set-EnvVar` 就是导出） |
+| `usage() { awk 'NR>1 && /^#/...' "$0"; }` | read the script's own `<# ... #>` comment block, then `-replace '^# ?',''` |
+| `(( 1 <= 12 ))` arithmetic test | `[int]` conversion + `-lt/-gt/-eq/-in` |
+| `"${!name}"` indirect expansion | `[Environment]::GetEnvironmentVariable($name, 'Process')` |
+| `export FOO=1` (for child processes) | `[Environment]::SetEnvironmentVariable('FOO','1','Process')` |
+| `env \| grep -E '^(TENSORFOLD\|TF_FLASHNEXT)_'` to collect `-e` arguments | not needed: the process environment is inherited by child processes anyway (`Set-EnvVar` is the export) |
 | `docker run -d` | `Start-Process -PassThru -WindowStyle Hidden -RedirectStandardOutput/Error` |
-| `docker logs -f` 后台 + `kill $LOGS_PID` | 两个 `[System.IO.StreamReader]` 轮询 + `try/finally { Dispose() }` |
-| `trap './stop.sh' INT TERM` | `try { ... } finally { ... }`（无信号可拦，只能保证退出路径） |
-| `docker inspect -f '{{.State.Running}}'` | `Get-ServerPid`（pid 文件 + `Get-Process -Id` 存活判断） |
-| `ss -ltn "sport = :$PORT"` | `Get-NetTCPConnection -LocalPort $Port -State Listen`，异常时 `TcpClient` 兜底 |
-| `awk '/^MemAvailable:/' /proc/meminfo` | `Get-CimInstance Win32_OperatingSystem` 的 `FreePhysicalMemory`（KB） |
-| `nvidia-smi --query-compute-apps=pid,used_memory` | `--query-gpu=memory.used,memory.free`（WDDM 下 per-process 恒为 `[N/A]`） |
+| `docker logs -f` in the background + `kill $LOGS_PID` | two `[System.IO.StreamReader]` polling loops + `try/finally { Dispose() }` |
+| `trap './stop.sh' INT TERM` | `try { ... } finally { ... }` (no signals to trap; only the exit path can be guaranteed) |
+| `docker inspect -f '{{.State.Running}}'` | `Get-ServerPid` (pid file + liveness check via `Get-Process -Id`) |
+| `ss -ltn "sport = :$PORT"` | `Get-NetTCPConnection -LocalPort $Port -State Listen`, with a `TcpClient` fallback on exception |
+| `awk '/^MemAvailable:/' /proc/meminfo` | `FreePhysicalMemory` (KB) from `Get-CimInstance Win32_OperatingSystem` |
+| `nvidia-smi --query-compute-apps=pid,used_memory` | `--query-gpu=memory.used,memory.free` (per-process is always `[N/A]` under WDDM) |
 | `hostname -I \| awk '{print $1}'` | `Get-NetIPConfiguration` → `IPv4Addresses[0]` |
-| `curl -s --max-time N URL` | `Invoke-RestMethod`（统一走 `Invoke-LocalRest`，见 §5） |
-| `python3 -c 'json.load(...)'` 取字段 | `ConvertFrom-Json` 后直接 `.data[0].id` |
+| `curl -s --max-time N URL` | `Invoke-RestMethod` (routed uniformly through `Invoke-LocalRest`, see §5) |
+| `python3 -c 'json.load(...)'` to pull a field | `ConvertFrom-Json`, then `.data[0].id` directly |
 | `mkdir -p` | `New-Item -ItemType Directory -Force` |
 | `SECONDS` | `[System.Diagnostics.Stopwatch]::StartNew()` → `.Elapsed.TotalSeconds` |
 | `$'\033[1;35m'` ANSI | `Write-Host -ForegroundColor Magenta` |
 | `date +%Y%m%d-%H%M%S` | `Get-Date -Format 'yyyyMMdd-HHmmss'` |
-| `$(cmd)` 命令替换 | `& $exe args` / `$(& $exe args)`；文本拼接用 `-f` 或 `@''@` here-string |
+| `$(cmd)` command substitution | `& $exe args` / `$(& $exe args)`; for text assembly use `-f` or an `@''@` here-string |
 
-### 6.4 内存与 GPU 指标：口径必须改
+### 6.4 Memory and GPU metrics: the semantics must change
 
-`/proc/meminfo` 的 `MemAvailable` 在这台统一内存机器上**没有对应物**：
-`Win32_OperatingSystem.FreePhysicalMemory` 只反映系统侧 ~30 GiB，而权重与 KV 来自驱动的 98 GiB GPU pool。
-照搬 Linux 的门槛（`WEIGHTS + KV + slack + floor + 2`）会得到"内存不足、拒绝启动"的假警报。
+`/proc/meminfo`'s `MemAvailable` has **no counterpart** on this unified-memory machine:
+`Win32_OperatingSystem.FreePhysicalMemory` reflects only the roughly 30 GiB on the system side, while the weights and KV come from the driver's 98 GiB GPU pool.
+Copying the Linux threshold (`WEIGHTS + KV + slack + floor + 2`) yields a false alarm of "out of memory, refuse to start".
 
-改写后的三处口径：
+The three reworked metrics:
 
-1. **启动门槛只算 host 侧**：`need - WEIGHTS - KV - floor`，且**只告警不阻断**。
-2. **加载中的地板线只告警不杀进程**：Linux 版 `a < MEM_FLOOR_GIB` 就 `docker stop` 并失败；Windows 版
-   首次低于就 warn 一次（`$floorWarned`），因为引擎自己按 `TENSORFOLD_MEMORY_RESERVE_GIB` 兜底，
-   而系统侧那个数字在加载期本来就会掉到 2 GiB（正常现象，实测 `only 2 GiB host memory left while loading`）。
-3. **心跳改用 GPU 总量**：`Get-GpuMemSummary` 用 `nvidia-smi --query-gpu=memory.used,memory.free` 汇总，
-   因为 WDDM 下 `--query-compute-apps` 的 `used_memory` 是 `[N/A]`，逐进程统计拿不到数。
+1. **The startup threshold counts only the host side**: `need - WEIGHTS - KV - floor`, and it **warns without blocking**.
+2. **The floor line during loading warns but never kills the process**: the Linux version ran `docker stop` and failed when
+   `a < MEM_FLOOR_GIB`; the Windows version warns once the first time it drops below (`$floorWarned`), because the engine keeps its own backstop via
+   `TENSORFOLD_MEMORY_RESERVE_GIB`, and the system-side number naturally drops to 2 GiB during loading (normal; observed `only 2 GiB host memory left while loading`).
+3. **The heartbeat switches to total GPU memory**: `Get-GpuMemSummary` aggregates `nvidia-smi --query-gpu=memory.used,memory.free`,
+   because under WDDM `used_memory` from `--query-compute-apps` is `[N/A]` and per-process accounting yields no numbers.
 
 ```powershell
 function Get-MemAvailableGiB {
@@ -517,132 +519,132 @@ function Get-MemAvailableGiB {
 }
 ```
 
-### 6.5 `.env` 与变量导出的差异（很重要）
+### 6.5 `.env` and variable-export differences (important)
 
-两边都读配方根目录 `.env`（`KEY=value`、`#` 注释、可选引号，**只读不执行**），但 PS 版有一处刻意的加强：
+Both sides read the recipe root's `.env` (`KEY=value`, `#` comments, optional quotes, **read only, never executed**), but the PS version has one deliberate hardening:
 
 ```powershell
-# config.ps1：.env 里的键"直接覆盖"，而不是"仅当环境里没有时才设"
+# config.ps1: keys from .env "override directly", instead of "set only if absent from the environment"
 Set-EnvVar $key $val
 ```
 
-原因：dot-source 的 `config.ps1` 会把上一轮 `Set-EnvVar` 的值留在**同一个 shell** 里，
-Linux 那套"环境优先、`.env` 只补空缺"的语义会让旧默认值反过来压住文件。另外因为 `.env` 里**每一个 key**
-都会被导出，所以引擎侧的开关（`TENSORFOLD_LOAD_STATS`、`TENSORFOLD_MEMORY_RESERVE_GIB` 等）
-只要写进 `.env` 就能进到子进程——这也是 §3.3 那个坑的由来。
+Reason: the dot-sourced `config.ps1` leaves the previous run's `Set-EnvVar` values in the **same shell**, so the Linux
+"environment first, `.env` only fills gaps" semantics would let stale defaults end up overriding the file. Also, because **every key**
+in `.env` gets exported, engine-side switches (`TENSORFOLD_LOAD_STATS`, `TENSORFOLD_MEMORY_RESERVE_GIB`, etc.)
+reach the child process simply by being written into `.env` — this is where the §3.3 pitfall came from.
 
-另一个差异，**曾经是错的，2026-10-28 修**：`config.sh` 导出 25 个引擎变量，而 `config.ps1` 当时只显式导出
-11 个，漏了 17 个 `TF_FLASHNEXT_*`。当初的判断是"其余走引擎默认值，两边默认值本来就是同一套"——
-**这句是错的**。引擎对未设置的变量一律当 **off**（或出厂规则），而配方导出的全是 `1`：
+One more difference that **used to be wrong; fixed 2026-10-28**: `config.sh` exports 25 engine variables, but `config.ps1` at the time explicitly exported
+only 11, missing 17 `TF_FLASHNEXT_*`. The original judgment was "the rest fall back to engine defaults, and both sides' defaults are the same set anyway" —
+**that was wrong**. The engine treats any unset variable as **off** (or its factory rule), while the recipe exports all `1`s:
 
-| 变量 | 引擎未设置时 | 配方 |
+| Variable | Engine, when unset | Recipe |
 |---|---|---|
 | `GATHER_EARLY` / `SAMPLE_CAND` / `SHARED_SIDE` / `GDN_LANES` / `KEEP_LATE` | `false` / `.off` | `1` |
 | `PROMPT_HC2` / `PROMPT_SHARED_DIRECT` / `PROMPT_GEMM2` / `DRAFT_AHEAD` / `WARM_AHEAD` | `false` | `1` |
 | `HEAD_PIECE` | `256` | `1536` |
 | `PREFILL_TAIL` | `0` | `512` |
-| `CONFIDENCE` | `0.6`（每 draft 地板） | `-0.4`（连乘 ≥ 0.4） |
+| `CONFIDENCE` | `0.6` (per-draft floor) | `-0.4` (cumulative product ≥ 0.4) |
 | `SAMPLED_HEADS` | `false` | `1` |
-| `HOST_DRAW_THREADS` | `0`（自动） | `7` |
-| `GATHER_READ` | 映射页错误 | `pread` |
+| `HOST_DRAW_THREADS` | `0` (auto) | `7` |
+| `GATHER_READ` | mapped page faults | `pread` |
 
-后果不是"行为略有差别"，而是**跑的根本不是同一台引擎**：未设置的开关让引擎走 fallback 路径
-（`GATHER_READ` 未设时退回映射页、`CONFIDENCE` 用 0.6 的每 draft 地板、`PROMPT_*` 整族关掉），
-所以补齐属于**正确性**，不是调优。现在的 `config.ps1` 导出 21 个 `TF_FLASHNEXT_*`，与 `config.sh`
-一一对应，每项都仍可被 `.env` 覆盖。
+The consequence is not "slightly different behavior" but **a fundamentally different engine running**: unset switches send the engine down fallback paths
+(`GATHER_READ` unset falls back to mapped pages, `CONFIDENCE` uses the 0.6 per-draft floor, the whole `PROMPT_*` family is off),
+so completing the exports is a matter of **correctness**, not tuning. The current `config.ps1` exports 21 `TF_FLASHNEXT_*`
+variables, in one-to-one correspondence with `config.sh`, each still overridable by `.env`.
 
-补齐之后记一句就够：**配方 README 里那些 +14% / 15–25% 是它自己 Linux 镜像上的数字**，在 WDDM
-上不能当作预期；本页的性能数字全部来自 sparkDash 实测（见 README 与 `docs/bench/`）。
+After completing them, one note suffices: **the +14% / 15–25% figures in the recipe README are numbers from its own Linux image**, which cannot be taken as expectations under WDDM;
+every performance number on this page comes from sparkDash measurements (see the README and `docs/bench/`).
 
-**验收办法**（新机器上必做一次）：
+**Acceptance procedure** (do it once on every new machine):
 
 ```powershell
-# 两边取出来做差集，剩下的应该只有"有意为之"的项
+# Extract from both sides and diff; what remains should only be items that are intentional
 grep -oE "^export (TF_FLASHNEXT|TENSORFOLD)_[A-Z0-9_]+" scripts/config.sh | sed 's/^export //' | sort > sh.txt
 grep -oE "Set-EnvVar '[A-Z0-9_]+'" scripts/config.ps1 | sed "s/Set-EnvVar '//;s/'//" | sort > ps.txt
 diff sh.txt ps.txt
 ```
 
-顺带记一个反例：`TF_FLASHNEXT_DEPTH` 在引擎里**不存在**（只有 `TF_FLASHNEXT_DEPTH_LOG`），写错的变量名
-不会报任何错，只是静默不生效——控制 draft 长度的是 `TF_FLASHNEXT_DRAFTS`。
+A cautionary counterexample to record along the way: `TF_FLASHNEXT_DEPTH` **does not exist** in the engine (only `TF_FLASHNEXT_DEPTH_LOG`); a mistyped variable name
+produces no error at all and simply does nothing silently — what controls draft length is `TF_FLASHNEXT_DRAFTS`.
 
-### 6.6 PowerShell 5.1 的语法地雷（写脚本时必踩）
+### 6.6 PowerShell 5.1 syntax landmines (guaranteed to be stepped on when writing scripts)
 
-1. 没有 `&&`、`||`、三元 `?:`、`??`。用 `; if ($?) { }` 或 `if/else`。
-2. `$Host` 是自动变量，不能当自定义变量（配方里用 `$BindHost` 就是这个原因）。
-3. `2>&1` 打原生程序会污染 `$?`；判退出码用 `$LASTEXITCODE`。
-4. `"$var:"` 会被解析成驱动器引用（`$cand:` 报"变量引用无效"），用 `${var}:`。
-5. 原生程序写 stderr 会被当成 `NativeCommandError`，在 `$ErrorActionPreference='Stop'` 下**直接中断脚本**。
-   `tf-cuda-test info`、`git`、`nvcc` 都会这样——靠文本和 `$LASTEXITCODE` 判断，别靠 `$?`。
-6. `SetEnvironmentVariable($n, $null)` 不一定真删，可能留下空串；而引擎把"存在但为空"当非法值
-   （`TENSORFOLD_CUDA_KERNELS= holds no aot.json`），所以**能显式给值就别删变量**（给 `native`）。
-7. 判断架构别用 `$env:PROCESSOR_ARCHITECTURE`（WOW64 下报 x86），用
-   `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture`。
+1. No `&&`, `||`, ternary `?:`, or `??`. Use `; if ($?) { }` or `if/else`.
+2. `$Host` is an automatic variable and cannot be used as a custom variable (the recipe uses `$BindHost` for exactly this reason).
+3. `2>&1` against a native program pollutes `$?`; check exit codes with `$LASTEXITCODE`.
+4. `"$var:"` is parsed as a drive reference (`$cand:` errors with "invalid variable reference"); use `${var}:`.
+5. A native program writing to stderr is treated as a `NativeCommandError`, and under `$ErrorActionPreference='Stop'` it **aborts the script outright**.
+   `tf-cuda-test info`, `git`, and `nvcc` all behave this way — judge by text and `$LASTEXITCODE`, not `$?`.
+6. `SetEnvironmentVariable($n, $null)` does not necessarily really delete; it may leave an empty string; and the engine treats "present but empty" as an invalid value
+   (`TENSORFOLD_CUDA_KERNELS= holds no aot.json`), so **give an explicit value instead of deleting the variable whenever possible** (give `native`).
+7. Don't detect the architecture with `$env:PROCESSOR_ARCHITECTURE` (reports x86 under WOW64); use
+   `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture`.
 
-### 6.7 `prepare.sh` 为什么没有对应物
+### 6.7 Why `prepare.sh` has no counterpart
 
-`prepare.sh` 干的是：拉基础镜像 → 下 zig → 打补丁 → 编 zig/CUDA → 装两个图像解码库 → 下权重 →
-`docker build` 打标签（标签里带补丁哈希，用来判"镜像是否过期"）。
+What `prepare.sh` does: pull the base image → download zig → patch → compile zig/CUDA → install two image-decoding libraries → download the weights →
+`docker build` with a tag (the tag embeds the patch hashes, used to decide "is the image stale").
 
-Windows 上没有容器这一层，"准备"退化成几件独立的事，也就是 skill 的 `scripts\engine\` 里那六步
-（配方侧只有 `scripts\recipe\1-install-ps1.ps1` 一件事：放 `.ps1`）：
+On Windows there is no container layer, so "prepare" degenerates into a few independent things, which are the six steps in the skill's `scripts\engine\`
+(on the recipe side there is only `scripts\recipe\1-install-ps1.ps1`, a single job: drop in the `.ps1` files):
 
-| 原 `prepare.sh` 的活 | Windows 上怎么做 |
+| What the original `prepare.sh` did | How it's done on Windows |
 |---|---|
-| 拉镜像 / `docker build` | 不需要；直接编译本机 exe |
-| 下 zig + 校验 sha256 | 手工装 zig 0.17.0（skill 的 `1-preflight.ps1` 检查版本） |
-| `git clone` + 打 17 个补丁 | `2-clone.ps1` + `3-apply-patches.ps1`（三份合并补丁） |
-| 编 CUDA / zig | `5-build.ps1`（`cmd /c` + `vcvarsall arm64` 内跑 `zig build`） |
-| 装 libjpeg-turbo / libwebp | 不需要：exe 旁边已有 `turbojpeg.dll` / `libwebpdecoder.so.3` |
-| 下权重（HF snapshot） | `hf download nvidia/Qwen3.8-Flash-Next-FP4-Local --revision b9ce18a6… --local-dir <模型目录>`；国内可用 ModelScope 镜像 `modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_dir <模型目录>`（`<模型目录>` 就是选单第 6 项，会写进配方 `.env` 的 `MODEL_PATH`） |
-| 装 torch（镜像里白拿） | `4-venv.ps1`：在**配方目录**建 `venv`，先 torch 后 `tensorfold[vision]`，见 §6.1.1 |
-| 镜像标签当"过期判据" | 没有镜像了 → 由 `3-apply-patches.ps1` 的 78 项与 exe 时间戳替代 |
+| Pull image / `docker build` | not needed; compile the native exe directly |
+| Download zig + verify sha256 | install zig 0.17.0 by hand (the skill's `1-preflight.ps1` checks the version) |
+| `git clone` + apply 17 patches | `2-clone.ps1` + `3-apply-patches.ps1` (the three merged patches) |
+| Compile CUDA / zig | `5-build.ps1` (runs `zig build` inside `cmd /c` + `vcvarsall arm64`) |
+| Install libjpeg-turbo / libwebp | not needed: `turbojpeg.dll` / `libwebpdecoder.so.3` already sit next to the exe |
+| Download the weights (HF snapshot) | `hf download nvidia/Qwen3.8-Flash-Next-FP4-Local --revision b9ce18a6… --local-dir <model dir>`; in China the ModelScope mirror works too: `modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_dir <model dir>` (the `<model dir>` is menu item 6, and it is written into the recipe `.env`'s `MODEL_PATH`) |
+| Install torch (free inside the image) | `4-venv.ps1`: create a `venv` in the **recipe directory**, torch first then `tensorfold[vision]`, see §6.1.1 |
+| Image tag as the "staleness criterion" | there are no images anymore → replaced by `3-apply-patches.ps1`'s 78 items and the exe timestamp |
 
 ---
 
-## 7. 验收清单（命令级）
+## 7. Acceptance checklist (command level)
 
 ```powershell
-# 0) 路径先定下来（只做一次；之后所有脚本读同一个 .migration.local.json）
+# 0) Pin the paths down first (once only; afterwards all scripts read the same .migration.local.json)
 powershell -ExecutionPolicy Bypass -File <skill>\scripts\Invoke-Migration.ps1 -Reset
-#    → 六行编号：root / python / zig / cuda / vcvars / model，d 重探、? 浏览、回车接受
-#    下面把选定的 root 记作 <root>（形如 D:\llm\latest），引擎目录固定是 <root>\TensorFold
+#    → six numbered lines: root / python / zig / cuda / vcvars / model; d re-probes, ? browses, Enter accepts
+#    Below, the chosen root is written as <root> (shaped like D:\llm\latest); the engine directory is fixed at <root>\TensorFold
 
-# 1) 补丁打全了吗（应列出三份，两处 spot-check 绿）。下面 <skill> = skill 目录
+# 1) Are all patches applied (should list three, both spot-checks green). Below, <skill> = the skill directory
 powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\3-apply-patches.ps1 -TensorFold <root>\TensorFold
-git -C <root>\TensorFold status --porcelain --untracked-files=all | Measure-Object | % Count   # 期望 78
+git -C <root>\TensorFold status --porcelain --untracked-files=all | Measure-Object | % Count   # expect 78
 
-# 2) 编出来了吗
+# 2) Did it build
 powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\5-build.ps1 -TensorFold <root>\TensorFold   # BUILD_EXIT=0
-powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\6-smoke.ps1                                # 三项 OK
+powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\6-smoke.ps1                                # three OKs
 
-# 3) venv 就位了吗（vision 才需要；不跑 --vision 可跳过）
-powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\4-venv.ps1     # 结尾应报 cuda True
+# 3) Is the venv in place (only needed for vision; skippable if you don't run --vision)
+powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\4-venv.ps1     # should end with cuda True
 Test-Path <root>\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold\venv\Scripts\python.exe   # True
 
-# 4) 配方侧的四个 .ps1 装好了吗（这一步是唯一会写配方目录的）
+# 4) Are the recipe side's four .ps1 files installed (this is the only step that writes to the recipe directory)
 powershell -ExecutionPolicy Bypass -File <skill>\scripts\recipe\1-install-ps1.ps1
-git -C <root>\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold status --porcelain   # 只有 ?? 没有 " M"
+git -C <root>\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold status --porcelain   # only ??, no " M"
 
-# 5) 加载快了吗（在配方目录里跑）
+# 5) Is loading fast now (run in the recipe directory)
 cd <root>\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold
-$env:TENSORFOLD_LOAD_STATS='1'; .\start.ps1       # 期望 server answered after ~71s
+$env:TENSORFOLD_LOAD_STATS='1'; .\start.ps1       # expect server answered after ~71s
 
 $err = Get-ChildItem build\logs\serve-*.err.log | Sort-Object LastWriteTime | Select-Object -Last 1
 (Get-Content $err -Encoding Default | Select-String 'layer \d+ took').Count        # 48
-Get-Content $err -Encoding Default | Select-String 'stage wait' | Select-Object -Last 3   # 每组 0-50 ms
-# Git Bash 里等价：grep -a "layer .* took" build/logs/serve-*.err.log | wc -l
+Get-Content $err -Encoding Default | Select-String 'stage wait' | Select-Object -Last 3   # 0-50 ms per group
+# Equivalent in Git Bash: grep -a "layer .* took" build/logs/serve-*.err.log | wc -l
 
-# 6) 权重没装错吗
+# 6) Were the weights loaded correctly
 #    POST /v1/chat/completions "Answer with one word: capital of France" → Paris
 
-# 7) 收工
+# 7) Wrap up
 .\stop.ps1                                   # Stopped; its GPU memory is free again
 ```
 
 ---
 
-## 8. 附：三份补丁与哈希
+## 8. Appendix: the three patches and their hashes
 
 ```
 c780c9610f8550407e61ec48797e8c85d5602d984818dbd555300a61ecca80ad  0001-recipe-0001-0017-on-v1.1.4.patch   74 files / 9380 lines / 495 KB
@@ -650,5 +652,5 @@ c780c9610f8550407e61ec48797e8c85d5602d984818dbd555300a61ecca80ad  0001-recipe-00
 911b7d75a0b0f30b7db502255b3f1f5be6263ed7160f9557534c398e48ec5d64  0003-load-pipeline.patch                4 files /  441 lines / 21 KB
 ```
 
-配套材料：`tensorfold-windows-arm64-migration` skill（`SKILL.md` 第 4 章=补丁、第 8 章=加载流水线、
-`references/build-notes.md` 第 5 章=设计取舍、`references/verification.md` 第 6 节=实测证据）。
+Companion material: the `tensorfold-windows-arm64-migration` skill (`SKILL.md` chapter 4 = patching, chapter 8 = load pipeline,
+`references/build-notes.md` chapter 5 = design trade-offs, `references/verification.md` section 6 = measured evidence).

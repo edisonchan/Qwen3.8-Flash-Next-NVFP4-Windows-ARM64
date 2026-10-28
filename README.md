@@ -44,8 +44,8 @@ the same tree that was measured; [`VERSIONS.md`](VERSIONS.md) explains each pin 
 | `scripts/recipe/1-install-ps1.ps1` | The **recipe** half, and the only script that writes into the MiaAI-Lab clone: copies four `.ps1` in, sets `MODEL_PATH` in `.env`, changes nothing else |
 | `scripts/Invoke-Migration.ps1` | One-shot runner: asks for paths, then runs the engine half, the recipe half, or both |
 | `recipe/start.ps1`, `stop.ps1`, `config.ps1`, `banner.ps1` | The recipe's shell scripts as PowerShell, including two PowerShell 5.1 bug fixes (`$null` becomes `''` in a `[string]` default; 5.1's `Invoke-RestMethod` defaults to POST). `config.ps1` carries one checkpoint preset — the FP4 export — and refuses any other `CHECKPOINT` |
-| `SKILL.md`, `references/` | The same procedure in agent-facing form (WorkBuddy/Claude skill layout), plus build notes and the verification record |
-| `docs/patching-and-port.md` | Long form: how each patch was cut, what broke, and the `.sh` → `.ps1` decisions one by one |
+| `SKILL.md`, `references/` | The same procedure in agent-facing form (WorkBuddy/Claude skill layout), plus build notes and the verification record — each in English and Chinese (`.zh-CN.md`) |
+| `docs/patching-and-port.md` | Long form: how each patch was cut, what broke, and the `.sh` → `.ps1` decisions one by one (`.zh-CN.md` for Chinese) |
 | `docs/bench/` | The sparkDash screenshots behind the table above: four decode prompt types at 1–4 streams, the 1k–128k prefill ladder, quality, tool eval |
 | `NOTICE`, `LICENSES/`, `CREDITS.md` | License chain. Read `NOTICE` before redistributing anything |
 | `VERSIONS.md` | The pinned engine / recipe / checkpoint / toolchain, the patch hashes, and what breaks if a pin moves |

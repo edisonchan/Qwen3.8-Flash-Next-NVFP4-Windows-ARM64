@@ -1,100 +1,102 @@
-# 构建与移植原理记录（TensorFold v1.1.4 / Windows ARM64）
+# Build and Porting Rationale Notes (TensorFold v1.1.4 / Windows ARM64)
 
-这份文档解释 **为什么** 要这么做，便于在新的引擎版本上重做迁移时判断哪些结论仍然成立。
+[English](build-notes.md)
 
-> 上游更新的版本（v1.1.5+）已经在主干加入 Windows 移植层（`zig/src/platform/sys.zig` 等），
-> 到那时第 2 章的多数条目可能已被上游吸收，**先查上游 `docs/WINDOWS.md`，再决定是否还需要本补丁**。
+This document explains **why** things are done this way, so that when redoing the migration on a new engine version you can judge which conclusions still hold.
+
+> Upstream versions (v1.1.5+) have already landed the Windows porting layer on the mainline (`zig/src/platform/sys.zig` etc.).
+> By then, most items in Chapter 2 may have been absorbed upstream — **check the upstream `docs/WINDOWS.md` first, then decide whether this patch is still needed**.
 
 ---
 
-## 1. 为什么是"合并补丁"，而不是顺序打 17 个配方补丁
+## 1. Why a "merged patch" instead of applying 17 recipe patches in sequence
 
-配方 `patches/0001..0017` 是按 TensorFold `db281878` 生成的。当前 `TF_REF` 是 `eab85828`（v1.1.4）——
-v1.1.4 把引擎重写了一遍（"the Zig engine has been reimplemented on its own Flash Next CUDA engine"），
-文件与上下文都漂移了。实测顺序 `git apply` 的结果：
+The recipe's `patches/0001..0017` were generated against TensorFold `db281878`. The current `TF_REF` is `eab85828` (v1.1.4) —
+v1.1.4 rewrote the engine ("the Zig engine has been reimplemented on its own Flash Next CUDA engine"),
+and both the files and the context have drifted. The measured result of a sequential `git apply`:
 
-- 6 个补丁能干净打上（0001/0002/0003/0004/0007/0009）；
-- 11 个需要 `git apply --3way`，其中多数会留下冲突块，必须人工裁决。
+- 6 patches apply cleanly (0001/0002/0003/0004/0007/0009);
+- 11 require `git apply --3way`, and most of those leave conflict hunks that must be adjudicated by hand.
 
-人工裁决不可复现，换台机器换个人就得到不同的树。所以本 skill 把这 17 个补丁的**最终正确结果**
-固化成一份合并补丁（`0001-recipe-0001-0017-on-v1.1.4.patch`），是一次三方合并的产物，
-逐字节比对过（见 `verification.md`）。
+Manual adjudication is not reproducible — a different machine or a different person yields a different tree. So this skill
+freezes the **final correct result** of those 17 patches into a single merged patch (`0001-recipe-0001-0017-on-v1.1.4.patch`), which is the product of a three-way merge
+and has been verified byte-for-byte (see `verification.md`).
 
-代价与权衡：
+Costs and trade-offs:
 
-| | 合并补丁 | 顺序 apply + 人工解冲突 |
+| | Merged patch | Sequential apply + manual conflict resolution |
 |---|---|---|
-| 可复现 | ✅ 确定性 | ❌ 依赖裁决 |
-| 体积 | ~495 KB | 17 个文件共约 470 KB |
-| 溯源 | 附带说明，可逐文件 `git diff` 复核 | 直接对应上游补丁 |
-| 引擎升级时 | 需重新生成一次 | 每版都要重做冲突裁决 |
+| Reproducible | ✅ Deterministic | ❌ Depends on adjudication |
+| Size | ~495 KB | 17 files totaling ~470 KB |
+| Traceability | Comes with notes; can be re-checked file by file with `git diff` | Maps directly to upstream patches |
+| On an engine upgrade | Needs to be regenerated once | Conflict adjudication must be redone for every version |
 
-生成方法（复现这套补丁）：
+Generation method (to reproduce this patch set):
 
 ```bash
-# 1) 干净克隆并在 eab85828 上把 17 个补丁以三方合并 + 人工裁决的方式打对（得到"目标树" A）
-# 2) 另建干净克隆（原始树 B = eab85828）
-# 3) 把 A 中所有变更文件覆盖到 B，git add -A，git diff --cached HEAD > 0001.patch
+# 1) Clone cleanly and, on eab85828, apply the 17 patches correctly via three-way merge + manual adjudication (yielding "target tree" A)
+# 2) Create a second clean clone (pristine tree B = eab85828)
+# 3) Copy all changed files from A over B, git add -A, git diff --cached HEAD > 0001.patch
 ```
 
 ---
 
-## 2. 五处 Windows/MSVC 兼容点
+## 2. Five Windows/MSVC compatibility points
 
-### 2.1 `__restrict__` 与显式模板实例化（3 个 .cu）
+### 2.1 `__restrict__` and explicit template instantiation (3 .cu files)
 
-MSVC 在**显式实例化**（`template __global__ void f<...>(...)`）时，要求实参类型与模板定义的形参类型
-**完全一致**，包括 `__restrict__` 这类 MSVC 扩展限定符。GCC/clang 把 `__restrict__` 当提示，比较类型时
-忽略它，所以上游在 Linux 上编得过。
+On **explicit instantiation** (`template __global__ void f<...>(...)`), MSVC requires the argument types to match
+the template definition's parameter types **exactly**, including MSVC-extension qualifiers such as `__restrict__`. GCC/clang treat `__restrict__` as a hint and
+ignore it when comparing types, which is why it compiles upstream on Linux.
 
-模板定义（`qmm_prefill.cu`）：
+Template definition (`qmm_prefill.cu`):
 
 ```cpp
 template <int GS, int BM, int BN, int WM, int WN, int STAGES, bool F32>
 __global__ void prefill_kernel(const __nv_bfloat16* __restrict__, const uint32_t* __restrict__, ...);
 ```
 
-显式实例化写成了：
+The explicit instantiation was written as:
 
 ```cpp
 template __global__ void tf_qmm_prefill::prefill_kernel<64, 128, 128, 2, 2, 2, false>(
-    const __nv_bfloat16*, const uint32_t*, ...);      // ← 少了 __restrict__
+    const __nv_bfloat16*, const uint32_t*, ...);      // ← missing __restrict__
 ```
 
-nvcc 报的是 `no instance of function template ... matches the specified type`，指向实例化那一行——
-**不是** 模板参数写错了，而是限定符不匹配。同文件里另一个实例化（`<2,4,3>`）恰好带着 `__restrict__`，
-所以它能过、这个不能，这就是最直接的对照证据。
+nvcc reports `no instance of function template ... matches the specified type`, pointing at the instantiation line —
+the template arguments are **not** wrong; it is the qualifiers that mismatch. Another instantiation in the same file (`<2,4,3>`) happens to carry `__restrict__`,
+so it passes while this one cannot — that is the most direct piece of contrasting evidence.
 
-同样的形态出现在：
+The same pattern appears in:
 
-- `prefill_attention.cu`：`hpattn_kernel<256,8,2,2>`、`hpattn8_kernel<256,8,2,2>`
-- `gdn_prefill.cu`：`chain_kernel<bf16,bf16,64,32>`
+- `prefill_attention.cu`: `hpattn_kernel<256,8,2,2>`, `hpattn8_kernel<256,8,2,2>`
+- `gdn_prefill.cu`: `chain_kernel<bf16,bf16,64,32>`
 
-修法：只补限定符，不动任何参数类型、模板实参、launch 配置。**零语义变更**。
+Fix: add only the qualifiers — do not touch any parameter types, template arguments, or launch configuration. **Zero semantic change**.
 
-> 这三个文件失败时，构建日志里只有 `error: process exited with code 1`（nvcc 的 C++ 诊断进了 stdout，
-> 而 zig 只转述退出码）。要看到真正的报错，单独跑 nvcc：
+> When these three files fail, the build log contains only `error: process exited with code 1` (nvcc's C++ diagnostics go to stdout,
+> while zig merely relays the exit code). To see the real error, run nvcc standalone:
 >
 > ```bat
 > nvcc -fatbin --expt-relaxed-constexpr -std=c++20 -Xcompiler=/Zc:preprocessor ^
 >      -O3 -gencode=arch=compute_121,code=sm_121 -o out.fatbin <file>.cu
 > ```
 >
-> 必须在 `vcvarsall arm64` 环境内跑。
+> This must be run inside a `vcvarsall arm64` environment.
 
-### 2.2 `std.posix.MAP` 在 Windows 上是 `void`
+### 2.2 `std.posix.MAP` is `void` on Windows
 
-`cuda_ple_reader.zig`（补丁 0013 引入）用匿名 mmap 分配 n-gram 行缓存：
+`cuda_ple_reader.zig` (introduced by patch 0013) uses an anonymous mmap to allocate the n-gram row cache:
 
 ```zig
 const mem = try std.posix.mmap(null, n, .{ .READ = true, .WRITE = true },
                               .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
 ```
 
-zig 0.17.0 里 `std.posix.MAP = system.MAP`，而 `system` 在 Windows 目标下没有匿名映射的枚举，
-`MAP` 解析为 `void` → 编译器报 `type 'void' does not support struct initialization syntax`。
+In zig 0.17.0, `std.posix.MAP = system.MAP`, and on Windows targets `system` has no enum for anonymous mappings,
+so `MAP` resolves to `void` → the compiler reports `type 'void' does not support struct initialization syntax`.
 
-修法（只影响 Windows 分支）：
+Fix (affects only the Windows branch):
 
 ```zig
 const mem: []align(std.heap.page_size_min) u8 = if (builtin.os.tag == .windows)
@@ -103,61 +105,61 @@ else
     try std.posix.mmap(null, slot_bytes, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
 ```
 
-`std.heap.PageAllocator` 在 POSIX 上就是 `mmap(MAP_ANONYMOUS|MAP_PRIVATE)`，在 Windows 上是
-`VirtualAlloc(MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)`：两者都满足这段代码依赖的三个性质——
-页对齐、零初始化、按需提交（未触碰的页不占物理内存）。所以缓存行为与 Linux 一致。
+`std.heap.PageAllocator` is `mmap(MAP_ANONYMOUS|MAP_PRIVATE)` on POSIX and
+`VirtualAlloc(MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` on Windows: both satisfy the three properties this code depends on —
+page alignment, zero-initialization, and demand-committed pages (untouched pages consume no physical memory). So the cache behavior matches Linux.
 
-释放端对应地分叉（`VirtualFree(MEM_RELEASE)` / `munmap`），Linux 路径保持原文一字不改。
+The release side forks correspondingly (`VirtualFree(MEM_RELEASE)` / `munmap`), with the Linux path left completely unchanged.
 
-### 2.3 `clock_gettime` 在这个 zig 里已经不是 posix API
+### 2.3 `clock_gettime` is no longer a posix API in this zig
 
-`cuda_ple.zig` 的计时统计用了：
+The timing statistics in `cuda_ple.zig` used:
 
 ```zig
 _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &t);
 ```
 
-- 该 zig 版本的 `std.posix` 已没有 `clock_gettime`；
-- `std.c` 里的声明在 Windows 上把 `clockid_t` 解析成 `void`，于是
-  `parameter of type 'void' not allowed in function with calling convention 'aarch64_aapcs_win'`。
+- `std.posix` in this zig version no longer has `clock_gettime`;
+- the declaration in `std.c` resolves `clockid_t` to `void` on Windows, yielding
+  `parameter of type 'void' not allowed in function with calling convention 'aarch64_aapcs_win'`.
 
-修法：用仓库自己的惯用法 `std.Io.Clock.awake.now(io)`（CLI 里大量使用），并把 `std.Io` 存进
-`Ngram` 结构体（`init` 已经接收 `io` 参数，只是原先没保存）。`std.Io` 在 Windows 上用
-`QueryPerformanceCounter` 实现，POSIX 上用 `CLOCK_MONOTONIC`——正是原代码想要的单调时钟。
+Fix: use the repo's own idiom `std.Io.Clock.awake.now(io)` (widely used in the CLI), and store `std.Io` in
+the `Ngram` struct (`init` already receives an `io` parameter; it simply wasn't saved before). On Windows, `std.Io` is
+implemented with `QueryPerformanceCounter`, and on POSIX with `CLOCK_MONOTONIC` — exactly the monotonic clock the original code wanted.
 
-调用点只有 6 处（`Split.part` 里 2 处、`rowsMany` 里 4 处），且都在 `Stat.on` 打开时才执行，
-不影响热路径。
+There are only 6 call sites (2 in `Split.part`, 4 in `rowsMany`), and all of them execute only when `Stat.on` is enabled,
+so the hot path is unaffected.
 
-### 2.4 一个曾经误导过我的假象
+### 2.4 A false lead that once misled me
 
-第一次修的时候，我把 `qmm_prefill.cu` 的报错理解成"zig 生成了 `prefill_kernel<...,1,2,2,...>` 的调用
-但没有实例化"，于是补了一个 WM=1 的实例化。**这是错的**：引擎里 `qmm_prefill` 的符号只有
+On my first fix, I interpreted the `qmm_prefill.cu` error as "zig generated a call to `prefill_kernel<...,1,2,2,...>`
+but never instantiated it", so I added a WM=1 instantiation. **This was wrong**: the only `qmm_prefill` symbols in the engine are
 
 ```
 _ZN14tf_qmm_prefill14prefill_kernelILi64ELi128ELi128ELi2ELi4ELi3ELb0EE
 _ZN14tf_qmm_prefill14prefill_kernelILi64ELi128ELi128ELi2ELi2ELi2ELb0EE
 ```
 
-（`zig/src/cuda/qlinear.zig` 的 `prefill` / `prefill22`），没有任何 WM=1 的引用。真正的病因自始至终
-只是 `__restrict__`。教训：**先看符号表，再改代码**；显式实例化的报错优先怀疑限定符，而不是模板实参。
+(`prefill` / `prefill22` in `zig/src/cuda/qlinear.zig`), with no reference to any WM=1 variant. The real root cause was `__restrict__` alone, from start to
+finish. Lesson: **check the symbol table first, then change code**; for explicit-instantiation errors, suspect qualifiers before template arguments.
 
 ---
 
-## 3. 构建环境的三条硬约束
+## 3. Three hard constraints on the build environment
 
-### 3.1 nvcc 必须能看见 arm64 版 `cl.exe`
+### 3.1 nvcc must be able to see the arm64 `cl.exe`
 
-`vcvarsall.bat arm64` 设置 `PATH` / `INCLUDE` / `LIB`，nvcc 靠它们找到 `Hostarm64\arm64\cl.exe` 和
-Windows SDK。**PowerShell 里 `call` 批处理不会改变父进程环境**，所以必须：
+`vcvarsall.bat arm64` sets `PATH` / `INCLUDE` / `LIB`, which nvcc relies on to find `Hostarm64\arm64\cl.exe` and the
+Windows SDK. **In PowerShell, `call`ing a batch file does not change the parent process's environment**, so you must:
 
 ```
-cmd /c build_now.bat        # .bat 内部 call vcvarsall arm64 && zig build ...
+cmd /c build_now.bat        # inside the .bat: call vcvarsall arm64 && zig build ...
 ```
 
-漏掉这一步的表现非常有欺骗性：**所有** `.cu` 都 `error: process exited with code 1`，
-日志里只有 C4819（代码页警告），看不到任何 C++ 错误。
+The symptom of skipping this step is very deceptive: **every** `.cu` fails with `error: process exited with code 1`,
+and the log shows only C4819 (codepage warnings), with no C++ errors visible at all.
 
-### 3.2 缓存与临时目录全部重定向进 `build\`
+### 3.2 Redirect all caches and temp directories into `build\`
 
 ```
 ZIG_LOCAL_CACHE_DIR  = <TF>\build\.zig-cache
@@ -165,137 +167,137 @@ ZIG_GLOBAL_CACHE_DIR = <TF>\build\zig-cache-global
 TMP / TEMP           = <TF>\build\tmp
 ```
 
-好处：不污染用户目录；清理即 `rm -rf build`；换机时不会误命中另一台机器的缓存。
+Benefits: no pollution of the user profile; cleanup is just `rm -rf build`; when switching machines you won't accidentally hit another machine's cache.
 
-### 3.3 目标三元组与架构
+### 3.3 Target triple and architecture
 
-`zig build native install -Dsm=121 --prefix build`。`-Dsm=121` 决定 nvcc 的
-`-gencode=arch=compute_121,code=sm_121`，并选择 `native/cuda.zig` 里 `share\tensorfold\cuda\sm121`
-这套核集路径。
-
----
-
-## 4. 运行时相关（与构建无关，但迁移时必然撞上）
-
-| 事项 | 结论 |
-|---|---|
-| `--kv-dtype` → `--kv-cache` | v1.1.4 改名。`start.sh`（Linux）已用新名，Windows 版 `start.ps1` 曾是旧名，症状是 `argument --kv-dtype: invalid choice: 'fp8'` |
-| AOT 核集（`TENSORFOLD_CUDA_KERNELS`） | 引擎优先用它，其次用可执行文件旁的 `share\tensorfold\cuda\sm<cap>`，最后才用内嵌 fatbin。旧引擎留下的核集缺 fp8 KV 支持，报 `Fp8KvUnsupported` |
-| 变量"存在但为空" | `aot.pick()` 只要变量非 null 就走"当作目录"分支，空串既不是 `native` 也没有 `aot.json` → `TENSORFOLD_CUDA_KERNELS= holds no aot.json`。要内嵌核集就给字面量 `native` |
-| checkpoint 格式 | v1.1.4 的 Flash Next CUDA 路径只接受 `quant_method=modelopt` + `quant_algo=MIXED_PRECISION`；GPTQ 的 INT4-AutoRound 会被 `UnsupportedCheckpoint` 拒绝——引擎已移除那条量化路径，所以本 repo 只支持 `nvidia/Qwen3.8-Flash-Next-FP4-Local` |
-| `kernels embedded true` | 冒烟里 `tf-cuda-test info` 的这一项说明不需要外部核集；为 `false` 时才需要 `tools/zig/flashnext_aot.py` |
-| 内存 | 权重 81 GiB 走 GPU pool，系统侧只需几 GiB 缓冲；`start.ps1` 的内存判断是告警不阻断 |
-| 加载慢（257 s） | 原生路径每层**现场装配**专家，单线程 + 2 槽映射缓存；`0003` 补丁修掉，见第 5 章 |
+`zig build native install -Dsm=121 --prefix build`. `-Dsm=121` determines nvcc's
+`-gencode=arch=compute_121,code=sm_121` and selects the kernel-set path `share\tensorfold\cuda\sm121`
+in `native/cuda.zig`.
 
 ---
 
-## 5. 模型加载流水线（257 s → 71 s）
+## 4. Runtime-related (unrelated to building, but you will inevitably hit these during migration)
 
-第 4 章是"能跑起来"；这一章是"跑起来别等四分钟"。全部改动在 host 侧，**没有一行 `.cu`、没有改 kernel
-参数或 launch 配置**。
-
-### 5.1 一层专家在做什么
-
-v1.1.4 的 `cuda_prompt_load.zig` 里，MoE 层不是从预量化缓存读，而是从**原始 safetensors 现场装配**：
-
-```
-safetensors 里的 NVFP4 专家  ──readPart──▶  codes + scales（按 16 一块的 e4m3 缩放）
-                              ──packGateUp / packOne──▶  引擎要的排布（gate 与 up 交织、down 单独）
-                              ──upload──▶  GPU 的 up / down 张量
-```
-
-一层 512 个专家，每个专家 3 个投影（gate / up / down），打包后每层约 **1350 MiB**（≈2.64 MiB/专家）。
-48 层就是 24576 个专家、约 63 GiB 的装配量。**这部分计算无法避免**（checkpoint 里没有引擎要的排布），
-能做的是让它并行、并且让 DMA 与其重叠。
-
-### 5.2 旧路径的三个放大器
-
-| 放大器 | 具体 | 代价 |
-|---|---|---|
-| 单线程逐专家 | `for (0..512)`：读 → 打包 → `up.upload()` → `down.upload()` → `stream.synchronize()` | 一次只用一个核；每层 1536 次小拷贝 + 512 次同步 |
-| 2 槽映射缓存 | `Store.released: [2]Held`，而一层专家散在 **14 个 shard** | 每层循环里反复 close/reopen 并重新解析分片头（全模型头部 50.6 MB，单文件最大 9.3 MB） |
-| 逐行 memcpy | `core/nvfp4_slice.zig` 的 `slice()` 一行一次 `@memcpy` | 占读耗时约 1/3；对整宽张量完全是浪费 |
-
-注意"头部重解析"在 Windows 上比 Linux 更贵：`cuda_ple_reader.zig` 的 Windows 分支用的是
-`PageAllocator`（`VirtualAlloc`）而不是 `mmap`，分片元数据每层都要重新解码一遍。
-
-### 5.3 现在的流水线
-
-```
-   ┌─────────── 组 i+1 ───────────┐        ┌──── 组 i+2 ────┐
-   │ 20 线程并行 pack 16 个专家   │        │                 │
-   │ 各自写进 stage B 的独立切片  │        │                 │
-   └──────────────┬───────────────┘        └─────────────────┘
-                  │ cuMemcpyHtoDAsync(stage B → GPU)
-   ┌──────────────┴───────────────┐
-   │ 同时：stage A 的 DMA 还在飞  │   ← 上一组的拷贝被这一组的打包掩盖
-   └──────────────────────────────┘
-```
-
-关键数值（本机实测，一层）：
-
-| 量 | 值 | 来源 |
-|---|---|---|
-| 每组专家数 | 16（`TENSORFOLD_LOAD_GROUP`） | `stage_default` |
-| 每 stage 体积 | 16 × 2.64 MiB ≈ 42 MiB | `Stage.init(d, group, up_bytes, down_bytes)` |
-| 双缓冲合计 | ≈ 84 MiB | 只占 host 可用 16 GiB 的 0.5% |
-| 一组 pack | ≈ 22 ms（20 线程） | 698 ms / 32 组 |
-| 一组 DMA | ≈ 2 ms | 42 MiB @ 20 GB/s |
-| 每组等待 | ≈ 0.5 ms | `stage wait` 18 ms / 32 组 |
-
-### 5.4 三个设计取舍
-
-1. **按"组"切，不按"专家一线程"**：DMA 投递有固定开销，一次 2.6 MiB 的拷贝比一次 42 MiB 的拷贝
-   每字节贵得多；而且逐专家投递会产生 1536 次 ioctl/层，开销比数据本身还大。攒够一组再投，才让
-   异步拷贝有意义。
-2. **原子取号，不做静态分片**：512 / 20 不能整除，静态分片会出现"线程 0 做 26 个、线程 19 做 22 个"，
-   尾部长；取号让跑得快的线程自然多干。
-3. **双缓冲 + 事件回压，不是"多缓冲越多越好"**：两个 stage 已经让拷贝 100% 藏在打包里
-   （`stage wait` 0.87 s / 67.6 s）。再加缓冲只增加 host 内存与首次启动延迟，收益为零。
-
-### 5.5 并发正确性
-
-并行读 checkpoint 会把原来"单线程顺序使用"的假设全部打破，有三处必须处理：
-
-| 风险 | 处理 |
+| Item | Conclusion |
 |---|---|
-| 多个线程同时借还映射，簿记互相踩 | `Store.mtx: std.Io.Mutex`（zig 0.17 已删除 `std.Thread.Mutex`）；**只在锁内记录指针，IO 在锁外** |
-| 槽满时把别人正在读的映射关掉 | 满槽时把"已归还"的映射扫进缓存（`releaseLocked`），**绝不 close 正在借出的映射** |
-| DMA 还在读 stage 就被下一组覆写 | 每个 stage 一个 `cuda.Event`，复用前 `synchronize()`（`Stage.reuse`） |
-| 出错时 20 个线程都在跑 | `Job.stop` 原子标志：一个失败，其余立刻收手，错误抛回调用者 |
+| `--kv-dtype` → `--kv-cache` | Renamed in v1.1.4. `start.sh` (Linux) already uses the new name; the Windows `start.ps1` once used the old name, with the symptom `argument --kv-dtype: invalid choice: 'fp8'` |
+| AOT kernel set (`TENSORFOLD_CUDA_KERNELS`) | The engine prefers it, then falls back to `share\tensorfold\cuda\sm<cap>` next to the executable, and only then to the embedded fatbin. A kernel set left behind by an older engine lacks fp8 KV support and reports `Fp8KvUnsupported` |
+| Variable "exists but is empty" | As long as the variable is non-null, `aot.pick()` takes the "treat as directory" branch; an empty string is neither `native` nor contains an `aot.json` → `TENSORFOLD_CUDA_KERNELS= holds no aot.json`. For the embedded kernel set, give the literal `native` |
+| Checkpoint format | v1.1.4's Flash Next CUDA path accepts only `quant_method=modelopt` + `quant_algo=MIXED_PRECISION`; GPTQ's INT4-AutoRound is rejected with `UnsupportedCheckpoint` — the engine has removed that quantization path, so this repo supports only `nvidia/Qwen3.8-Flash-Next-FP4-Local` |
+| `kernels embedded true` | In the smoke test, this field of `tf-cuda-test info` means no external kernel set is needed; only when it is `false` do you need `tools/zig/flashnext_aot.py` |
+| Memory | The 81 GiB of weights go through the GPU pool; the system side needs only a few GiB of buffers; the memory check in `start.ps1` warns but does not block |
+| Slow load (257 s) | The native path **assembles experts on the fly** layer by layer, single-threaded with a 2-slot mapped cache; patch `0003` fixes this — see Chapter 5 |
 
-另外两条泛型约束：`loadShape(store: anytype)` 的测试 mock 不是 `*wt.Store`，并行路径只在
-`@TypeOf(store) == *wt.Store` 时启用，**单测仍走原来的串行实现**；`fill` 里任何分配失败都会打 warn
-退回 `serial()`，不会让加载整体失败。
+---
 
-### 5.6 度量口径
+## 5. The model loading pipeline (257 s → 71 s)
 
-`TENSORFOLD_LOAD_STATS=1` 会打两行/层（stderr）：
+Chapter 4 was about "getting it to run"; this chapter is about "not waiting four minutes once it runs". All changes are host-side, **not a single line
+of `.cu`, and no kernel parameters or launch configurations were changed**.
+
+### 5.1 What one layer's experts are doing
+
+In v1.1.4's `cuda_prompt_load.zig`, MoE layers are not read from a pre-quantized cache but **assembled on the fly from raw safetensors**:
+
+```
+NVFP4 experts in safetensors  ──readPart──▶  codes + scales (e4m3 scales, one block per 16)
+                              ──packGateUp / packOne──▶  the layout the engine wants (gate and up interleaved, down separate)
+                              ──upload──▶  the up / down tensors on the GPU
+```
+
+A layer has 512 experts, each expert has 3 projections (gate / up / down), and after packing each layer is about **1350 MiB** (≈2.64 MiB/expert).
+48 layers means 24576 experts and roughly 63 GiB of assembly work. **This computation cannot be avoided** (the checkpoint does not contain the layout the engine wants);
+what can be done is to parallelize it and let DMA overlap with it.
+
+### 5.2 The three amplifiers of the old path
+
+| Amplifier | Details | Cost |
+|---|---|---|
+| Single-threaded, expert by expert | `for (0..512)`: read → pack → `up.upload()` → `down.upload()` → `stream.synchronize()` | Only one core used at a time; per layer, 1536 small copies + 512 synchronizations |
+| 2-slot mapped cache | `Store.released: [2]Held`, while one layer's experts are spread across **14 shards** | Within each layer's loop, mappings are repeatedly closed/reopened and shard headers re-parsed (50.6 MB of headers model-wide, up to 9.3 MB for a single file) |
+| Row-by-row memcpy | `slice()` in `core/nvfp4_slice.zig` does one `@memcpy` per row | Accounts for about 1/3 of read time; pure waste for full-width tensors |
+
+Note that "header re-parsing" is more expensive on Windows than on Linux: the Windows branch of `cuda_ple_reader.zig` uses
+`PageAllocator` (`VirtualAlloc`) instead of `mmap`, so shard metadata must be re-decoded on every layer.
+
+### 5.3 The current pipeline
+
+```
+   ┌────────── group i+1 ───────────┐        ┌──── group i+2 ────┐
+   │ 20 threads pack 16 experts in  │        │                   │
+   │ parallel into stage B's slices │        │                   │
+   └───────────────┬────────────────┘        └───────────────────┘
+                   │ cuMemcpyHtoDAsync(stage B → GPU)
+   ┌───────────────┴────────────────┐
+   │ Meanwhile: stage A's DMA is    │   ← the previous group's copy is hidden by this group's packing
+   └────────────────────────────────┘
+```
+
+Key numbers (measured on this machine, for one layer):
+
+| Quantity | Value | Source |
+|---|---|---|
+| Experts per group | 16 (`TENSORFOLD_LOAD_GROUP`) | `stage_default` |
+| Size per stage | 16 × 2.64 MiB ≈ 42 MiB | `Stage.init(d, group, up_bytes, down_bytes)` |
+| Double buffering total | ≈ 84 MiB | Only 0.5% of the 16 GiB of available host memory |
+| One group's pack | ≈ 22 ms (20 threads) | 698 ms / 32 groups |
+| One group's DMA | ≈ 2 ms | 42 MiB @ 20 GB/s |
+| Wait per group | ≈ 0.5 ms | `stage wait` 18 ms / 32 groups |
+
+### 5.4 Three design trade-offs
+
+1. **Slice by "group", not "one thread per expert"**: DMA submission has a fixed overhead — a 2.6 MiB copy costs far more per byte than a 42 MiB one;
+   and submitting per expert would produce 1536 ioctls per layer, with overhead larger than the data itself. Only by batching up a full group
+   before submitting does the asynchronous copy become worthwhile.
+2. **Atomic ticket-taking, no static partitioning**: 512 / 20 does not divide evenly, so static partitioning yields "thread 0 does 26, thread 19 does 22",
+   leaving a long tail; ticket-taking lets faster threads naturally do more work.
+3. **Double buffering + event back-pressure — not "the more buffers, the better"**: two stages already hide the copy 100% inside the packing
+   (`stage wait` 0.87 s / 67.6 s). Adding more buffers only increases host memory and first-startup latency, with zero benefit.
+
+### 5.5 Concurrency correctness
+
+Reading checkpoints in parallel breaks every assumption that the code was "used sequentially by a single thread"; three places must be handled:
+
+| Risk | Handling |
+|---|---|
+| Multiple threads leasing/returning mappings at the same time, bookkeeping stepping on each other | `Store.mtx: std.Io.Mutex` (zig 0.17 removed `std.Thread.Mutex`); **record pointers inside the lock only, do IO outside it** |
+| Closing a mapping someone else is reading when the slot pool is full | When slots are full, sweep the "returned" mappings into the cache (`releaseLocked`); **never close a mapping that is currently leased out** |
+| The next group overwrites a stage while the DMA is still reading it | One `cuda.Event` per stage, `synchronize()` before reuse (`Stage.reuse`) |
+| 20 threads all still running when an error occurs | `Job.stop` atomic flag: one failure, the rest stop immediately, and the error is thrown back to the caller |
+
+Two additional generic constraints: the test mock for `loadShape(store: anytype)` is not a `*wt.Store`, so the parallel path is enabled only when
+`@TypeOf(store) == *wt.Store` — **unit tests still run the original serial implementation**; any allocation failure in `fill` logs a warning
+and falls back to `serial()`, never failing the load as a whole.
+
+### 5.6 Measurement conventions
+
+`TENSORFOLD_LOAD_STATS=1` prints two lines per layer (to stderr):
 
 ```
 info: flashnext: 512 experts in 32 groups of 16 on 20 threads: pack 698 ms, stage wait 18 ms, 1350 MiB
 info: flashnext: layer 47 took 1170 ms
 ```
 
-- `pack` = 全部组的 CPU 打包累计（含并行，所以是墙钟累计）
-- `stage wait` = 所有 `Stage.reuse()` 等待之和 → **这是双缓冲是否够用的直接指标**，>5% 就该怀疑组太小
-- `layer N took` = 整层（含非专家权重、norm、共享专家）
-- 末尾的 `1350 MiB` = `(up_bytes + down_bytes) * count >> 20`，即该层打包后总字节
+- `pack` = cumulative CPU packing time across all groups (including parallelism, so it is a wall-clock accumulation)
+- `stage wait` = the sum of all `Stage.reuse()` waits → **this is the direct indicator of whether double buffering suffices**; above 5%, suspect the group is too small
+- `layer N took` = the whole layer (including non-expert weights, norms, and shared experts)
+- The trailing `1350 MiB` = `(up_bytes + down_bytes) * count >> 20`, i.e. the layer's total packed bytes
 
-`cuda_prompt.zig` 在 48 层读完后调 `store.dropShards()`，把映射与解析过的头部一起释放（约 0.6 GB）。
+After all 48 layers are read, `cuda_prompt.zig` calls `store.dropShards()`, releasing the mappings and the parsed headers together (about 0.6 GB).
 
 ---
 
-## 6. 版本升级时怎么重做
+## 6. How to redo all this on a version upgrade
 
-1. 读配方 `CHANGELOG.md`，确定新的 `TF_REF`（`scripts/config.sh`）。
-2. 干净克隆引擎，检出该 commit。
-3. 按顺序 `git apply --3way` 打配方补丁，人工裁决冲突，得到"目标树"。
-4. 用第 1 章的方法把目标树压成一份合并补丁。
-5. 重新跑构建，把新出现的 Windows 报错逐条归类：
-   - `no instance of function template` → 补 `__restrict__`（可能新增文件）
-   - `void` 相关 → 平台 API 缺失（查 `std.posix` 在该 zig 版本里的可用性）
-   - 其它 → 单独判断，**只改平台分支**，不改算法
-6. 更新本 skill 的三份补丁与 `SKILL.md` 的钉死值表。`0003` 是"在 0001+0002 之后"切的，升级时要在
-   已经打好的目标树上重新切一次：把要保留的加载改动复现到该树，`git diff` 出来即是最小增量。
-7. 重测加载耗时并更新第 5 章的数字（`TENSORFOLD_LOAD_STATS=1` + `build\logs\serve-*.err.log`）。
+1. Read the recipe's `CHANGELOG.md` to determine the new `TF_REF` (`scripts/config.sh`).
+2. Clone the engine cleanly and check out that commit.
+3. Apply the recipe patches in order with `git apply --3way`, adjudicate conflicts by hand, and obtain the "target tree".
+4. Use the method from Chapter 1 to compress the target tree into a single merged patch.
+5. Re-run the build and categorize each newly appearing Windows error:
+   - `no instance of function template` → add `__restrict__` (new files may be involved)
+   - `void`-related → missing platform API (check `std.posix` availability in that zig version)
+   - Anything else → judge case by case; **change only the platform branch**, never the algorithm
+6. Update this skill's three patches and the pinned-value table in `SKILL.md`. `0003` was cut "after 0001+0002"; on an upgrade, re-cut it on
+   the already-patched target tree: reproduce the loading changes you want to keep onto that tree, and the `git diff` out of it is the minimal increment.
+7. Re-measure the load time and update the numbers in Chapter 5 (`TENSORFOLD_LOAD_STATS=1` + `build\logs\serve-*.err.log`).
