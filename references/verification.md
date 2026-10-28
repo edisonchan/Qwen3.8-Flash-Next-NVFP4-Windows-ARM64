@@ -6,12 +6,12 @@
 
 | 项 | 值 |
 |---|---|
-| 主机 | Windows 11 ARM64，RTX Spark N1X（48 SMs，sm_121），驱动 CUDA 13050 |
+| 主机 | Windows 11 ARM64（build 10.0.28000），RTX Spark N1X（48 SMs，sm_121），驱动 621.01 / CUDA API 13050 |
 | zig | 0.17.0 (`D:\llm\zig-aarch64-windows-0.17.0`) |
-| CUDA | 13.4 (`...\CUDA\v13.4`) |
-| MSVC | VS2022 BuildTools 17.14.42，`Hostarm64\arm64\cl.exe` |
+| CUDA | 13.4 (`...\CUDA\v13.4`, `V13.4.92`) |
+| MSVC | VS2022 BuildTools，cl `14.44.35207`，`Hostarm64\arm64\cl.exe` |
 | 引擎 | `ashhart/TensorFold` @ `eab8582819688325e371907e4706e1c602b8a273`（tag v1.1.4） |
-| 配方 | `MiaAI-Lab/Qwen3.8-...-TensorFold` @ `fd3f43e`（main） |
+| 配方 | `MiaAI-Lab/Qwen3.8-...-TensorFold` @ `fd3f43e11238553685ebb68b6d8ab2b112818e3c`（钉住的提交，非 main 游标） |
 
 ## 2. 补丁一致性（逐字节）
 

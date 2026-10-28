@@ -16,6 +16,19 @@ upstream recipe (MiaAI-Lab, MIT)          this repository
                                           patches/0003       (load pipeline, 257 s → 71 s)
 ```
 
+## Pinned versions
+
+This port is verified against exactly one combination. It is pinned in the scripts, so a clone today builds
+the same tree that was measured; [`VERSIONS.md`](VERSIONS.md) explains each pin and what breaks if it moves.
+
+| Component | Pinned to |
+|---|---|
+| TensorFold engine | tag **`v1.1.4`** = `eab8582819688325e371907e4706e1c602b8a273` (the recipe's own `TF_REF`) |
+| MiaAI-Lab recipe | commit **`fd3f43e11238553685ebb68b6d8ab2b112818e3c`**, carrying `patches/0001..0017` |
+| Model checkpoint | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ **`b9ce18a6887e18c089fdea8509a33e63429a3300`** (NVFP4, `modelopt` / `MIXED_PRECISION`, 96 GB) |
+| Toolchain | zig **0.17.0** aarch64-windows · CUDA toolkit **13.4** (`V13.4.92`) · MSVC **v143 14.44.35207** arm64 |
+| Patch series | `0001` + `0002` + `0003`, hashes in [`VERSIONS.md` §2](VERSIONS.md) |
+
 ## What is in here
 
 | Path | What it is |
@@ -28,6 +41,7 @@ upstream recipe (MiaAI-Lab, MIT)          this repository
 | `SKILL.md`, `references/` | The same procedure in agent-facing form (WorkBuddy/Claude skill layout), plus build notes and the verification record |
 | `docs/patching-and-port.md` | Long form: how each patch was cut, what broke, and the `.sh` → `.ps1` decisions one by one |
 | `NOTICE`, `LICENSES/`, `CREDITS.md` | License chain. Read `NOTICE` before redistributing anything |
+| `VERSIONS.md` | The pinned engine / recipe / checkpoint / toolchain, the patch hashes, and what breaks if a pin moves |
 
 ## Quick start
 
@@ -49,6 +63,10 @@ Step by step, if you want to see each stage:
 .\scripts\5-build.ps1  -TensorFold D:\llm\latest\TensorFold          # BUILD_EXIT=0, ~5 min
 .\scripts\6-smoke.ps1  -TensorFold D:\llm\latest\TensorFold          # version 1.1.4 / nvidia-sm121 / OK
 ```
+
+Both clones are **pinned**, not followed: the engine to `v1.1.4` and the recipe to the commit patch `0001` was
+cut from (see [`VERSIONS.md`](VERSIONS.md)). `2-clone.ps1` warns if the recipe's `main` has moved past that
+point; pass `-RecipeRef ''` only if you intend to follow it.
 
 Serving. The recipe clone carries the `.sh` files; copy the PowerShell ones in beside them:
 

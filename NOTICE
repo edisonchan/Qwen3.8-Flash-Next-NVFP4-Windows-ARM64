@@ -11,9 +11,9 @@ It contains no model weights and no compiled binaries.
 1. This repository's own work -- MIT
 ------------------------------------
 
-  README.md, README.zh-CN.md, NOTICE, LICENSE
+  README.md, README.zh-CN.md, NOTICE, LICENSE, VERSIONS.md
   .gitignore, .gitattributes
-  docs/, references/, scripts/, SKILL.md
+  docs/, references/, scripts/, recipe/, SKILL.md
   patches/0002-windows-arm64-port.patch
   patches/0003-load-pipeline.patch
 
@@ -25,7 +25,8 @@ It contains no model weights and no compiled binaries.
 -----------------------------------------------------
 
   https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold
-  read at commit fd3f43e
+  read at commit fd3f43e11238553685ebb68b6d8ab2b112818e3c
+  (patches/0001..0017 as they stand at that commit; see VERSIONS.md)
   Copyright (c) 2026 MiaAI-Lab
   Full text: LICENSES/MiaAI-Lab-MIT.txt
 
@@ -50,7 +51,7 @@ It contains no model weights and no compiled binaries.
 -------------------------------------------------------
 
   https://github.com/ashhart/TensorFold
-  release v1.1.4, commit eab85828
+  release v1.1.4, commit eab8582819688325e371907e4706e1c602b8a273
   Copyright 2026 TensorFold contributors
 
   Apache License, Version 2.0:                  LICENSES/Apache-2.0.txt
@@ -102,7 +103,9 @@ It contains no model weights and no compiled binaries.
   the base model is under the Qwen Community License 1.0
   (https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE). You accept
   those terms when you download the weights; this repository only names the repo
-  and revision to fetch. The same export is mirrored at
+  and the revision to fetch -- nvidia/Qwen3.8-Flash-Next-FP4-Local at
+  b9ce18a6887e18c089fdea8509a33e63429a3300 (see VERSIONS.md). The same export is
+  mirrored at
   https://www.modelscope.cn/models/nv-community/Qwen3.8-Flash-Next-FP4-Local --
   a mirror changes who serves the bytes, not which terms apply to them.
 
@@ -131,6 +134,7 @@ It contains no model weights and no compiled binaries.
   patches/0003-load-pipeline.patch                edisonchan, 4 loader files on TensorFold
   recipe/*.ps1                                    MiaAI-Lab (.sh) + edisonchan (.ps1)
   scripts/*.ps1, references/*.md, docs/, SKILL.md edisonchan
+  VERSIONS.md                                     edisonchan, the pinned versions
   CREDITS.md                                      MiaAI-Lab, reproduced with a provenance note at the top
 
   See CREDITS.md for everyone this port builds on.

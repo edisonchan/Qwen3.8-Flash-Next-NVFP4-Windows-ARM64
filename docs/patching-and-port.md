@@ -17,12 +17,18 @@
 | 项 | 值 |
 |---|---|
 | 引擎 | `ashhart/TensorFold` @ `eab8582819688325e371907e4706e1c602b8a273`（tag v1.1.4） |
+| 配方 | `MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold` @ `fd3f43e11238553685ebb68b6d8ab2b112818e3c`（其 `patches/0001..0017`） |
+| 权重 | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ `b9ce18a6887e18c089fdea8509a33e63429a3300`（`modelopt`/`MIXED_PRECISION`，96 GB） |
+| 工具链 | zig 0.17.0（aarch64-windows）· CUDA 13.4（`V13.4.92`）· MSVC 14.44.35207 arm64 · Windows 11 ARM64 build 10.0.28000 |
 | 补丁 | `0001`（配方 0001–0017 合并）→ `0002`（Windows/MSVC 5 处）→ `0003`（加载流水线），**顺序不能换** |
 | 工作树 | 78 项变更 = 59 修改 + 19 新增 |
 | 产物 | `TensorFold\build\native\bin\tensorfold-native.exe`（PE32+ ARM64，36 MB）、`tf-cuda-test.exe`（75 MB） |
 | 冷构建 | 5–8 分钟（`cmd /c` + `vcvarsall arm64` 内跑 `zig build native install -Dsm=121`） |
 | 模型加载 | 原生 257 s → **71 s**（引擎自报 `loaded in 67.6s`） |
 | 起服 | `.\start.ps1` → `server answered after 71s` → 冒烟 `OK` |
+
+> 版本只有一个权威来源：[`VERSIONS.md`](../VERSIONS.md)。每处钉住的理由、挪动会坏在哪、核对命令都在那里；
+> 本文所有数字都对应上表这一组合。
 
 ---
 

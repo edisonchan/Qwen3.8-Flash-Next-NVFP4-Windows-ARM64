@@ -19,12 +19,15 @@ agent_created: true
 |---|---|
 | 引擎上游 | `https://github.com/ashhart/TensorFold` |
 | 引擎版本 | tag `v1.1.4` = `eab8582819688325e371907e4706e1c602b8a273` |
-| 配方上游 | `https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold` @ `main`（验证于 `fd3f43e`） |
-| 配方 pin 的引擎 | `scripts/config.sh` → `TF_REF=eab8582819688325e371907e4706e1c602b8a273` |
+| 配方上游 | `https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold` **钉在** `fd3f43e11238553685ebb68b6d8ab2b112818e3c`（其 `patches/0001..0017` 即补丁 0001 的来源） |
+| 配方 pin 的引擎 | `scripts/config.sh` → `TF_REF=eab8582819688325e371907e4706e1c602b8a273`（与上表同一提交） |
+| 引擎/配方 ref 的落点 | `2-clone.ps1 -TfRef/-RecipeRef`、`Invoke-Migration.ps1` 同名参数、`3-apply-patches.ps1` 硬校验 HEAD |
+| 版本总表 | `VERSIONS.md`（每处钉住的理由 + 挪动会坏在哪 + 校验命令） |
 | zig | 0.17.0 aarch64-windows，`sha256 9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8` |
-| CUDA | 13.4 toolkit（`nvcc.exe`），驱动需支持 CUDA 13.x（本机 `13050` = 13.5） |
-| MSVC | VS 2022 Build Tools + `MSVC v143 C++ ARM64 build tools`（`Hostarm64\arm64\cl.exe`） |
+| CUDA | 13.4 toolkit（`nvcc.exe`，`V13.4.92`），驱动需支持 CUDA 13.x（本机 `621.01` / API `13050` = 13.5） |
+| MSVC | VS 2022 Build Tools `14.44.35207` + `MSVC v143 C++ ARM64 build tools`（`Hostarm64\arm64\cl.exe`） |
 | GPU 目标 | `sm_121`（`compute_121`，RTX Spark N1X，48 SMs） |
+| 权重 | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ `b9ce18a6887e18c089fdea8509a33e63429a3300`（`modelopt`/`MIXED_PRECISION`，96 GB） |
 | Python | 3.13 arm64（仅 `--vision` 需要） |
 | 模型加载 | **71 s / 48 层**（打全三份补丁；原生路径 257 s，见第 8 章） |
 | 落地根 | 默认 `D:\llm\latest` |

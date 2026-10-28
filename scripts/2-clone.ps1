@@ -1,6 +1,10 @@
 #Requires -Version 5.1
 <#
-  Step 2/6 -- clone both repositories and pin TensorFold to the release the recipe builds on.
+  Step 2/6 -- clone both repositories and pin each to the commit the patch series describes.
+
+  Two pins, both from VERSIONS.md:
+    engine  -TfRef     eab8582819688325e371907e4706e1c602b8a273   (tag v1.1.4, the recipe's TF_REF)
+    recipe  -RecipeRef fd3f43e11238553685ebb68b6d8ab2b112818e3c   (the commit 0001 was cut from)
 
   Layout is fixed by the recipe: scripts\config.ps1 looks for the engine at
   '<parent of the recipe>\TensorFold\build\native\bin\tensorfold-native.exe', so the two
@@ -10,8 +14,9 @@ param(
     [string]$Root       = 'D:\llm\latest',
     [string]$RecipeRepo = 'https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold',
     [string]$TfRepo     = 'https://github.com/ashhart/TensorFold',
-    [string]$TfRef      = 'eab8582819688325e371907e4706e1c602b8a273',   # v1.1.4
-    [string]$RecipeRef  = '',                                            # empty: the recipe's current main
+    [string]$TfRef      = 'eab8582819688325e371907e4706e1c602b8a273',   # v1.1.4, see VERSIONS.md
+    [string]$RecipeRef  = 'fd3f43e11238553685ebb68b6d8ab2b112818e3c',   # the commit patch 0001 describes
+                                                                        # (pass '' to follow the recipe's main)
     [switch]$Force
 )
 
@@ -45,6 +50,11 @@ if ($RecipeRef) {
     & git -C $RecipeDir fetch --all --quiet
     & git -C $RecipeDir checkout $RecipeRef --quiet
     if ($LASTEXITCODE -ne 0) { Fail "the recipe has no commit $RecipeRef" }
+    # The recipe keeps moving; patch 0001 describes its patches/ directory at the pin, nothing later.
+    $ahead = (& git -C $RecipeDir rev-list --count "$RecipeRef..origin/main" 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $ahead -and [int]$ahead -gt 0) {
+        Write-Host "  [WARN] the recipe's main is $ahead commit(s) past the pin ($($RecipeRef.Substring(0,7))); 0001 describes the pinned commit only (VERSIONS.md)." -ForegroundColor Yellow
+    }
 }
 $recipeCommit = (& git -C $RecipeDir rev-parse HEAD).Trim()
 
@@ -77,10 +87,13 @@ $manifest = [ordered]@{
     host          = $env:COMPUTERNAME
     os_arch       = [string][System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
     recipe_repo   = $RecipeRepo
+    recipe_pin    = $RecipeRef
     recipe_commit = $recipeCommit
     tf_repo       = $TfRepo
+    tf_pin        = $TfRef
     tf_commit     = $tfCommit
     free_gib      = $freeGB
+    versions_doc  = 'VERSIONS.md'
 }
 $manifestPath = Join-Path $logDir '00-migration-manifest.json'
 $manifest | ConvertTo-Json | Set-Content -Path $manifestPath -Encoding UTF8

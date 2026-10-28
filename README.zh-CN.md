@@ -7,6 +7,19 @@ ARM64（GB10 / `sm_121`）的**非官方**版本。同一个 NVFP4 权重、同�
 
 [English](README.md)
 
+## 版本钉死
+
+这套移植只在**一个**版本组合上验证过。脚本里已经把它钉住，所以今天 clone 下来构建出的树，与实测的那棵树一致；
+每一处钉住的理由、以及挪动它会坏在哪，见 [`VERSIONS.md`](VERSIONS.md)。
+
+| 组件 | 钉到 |
+|---|---|
+| TensorFold 引擎 | tag **`v1.1.4`** = `eab8582819688325e371907e4706e1c602b8a273`（与配方自己的 `TF_REF` 同一个提交） |
+| MiaAI-Lab 配方 | commit **`fd3f43e11238553685ebb68b6d8ab2b112818e3c`**，其 `patches/0001..0017` 即补丁 0001 的来源 |
+| 模型权重 | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ **`b9ce18a6887e18c089fdea8509a33e63429a3300`**（NVFP4，`modelopt` / `MIXED_PRECISION`，96 GB） |
+| 工具链 | zig **0.17.0** aarch64-windows · CUDA toolkit **13.4**（`V13.4.92`）· MSVC **v143 14.44.35207** arm64 |
+| 补丁序列 | `0001` + `0002` + `0003`，三份哈希见 [`VERSIONS.md` §2](VERSIONS.md) |
+
 ## 里面有什么
 
 | 路径 | 是什么 |
@@ -19,6 +32,7 @@ ARM64（GB10 / `sm_121`）的**非官方**版本。同一个 NVFP4 权重、同�
 | `SKILL.md`、`references/` | 同一套流程的 agent 可执行形态（WorkBuddy / Claude skill 布局），外加构建笔记与验证记录 |
 | `docs/patching-and-port.md` | 长文：每份补丁怎么切出来的、踩了什么、`.sh → .ps1` 的取舍逐条 |
 | `NOTICE`、`LICENSES/`、`CREDITS.md` | 许可链。二次分发前先读 `NOTICE` |
+| `VERSIONS.md` | 钉死的引擎 / 配方 / 权重 / 工具链版本、补丁哈希，以及挪动任一版本会坏在哪 |
 
 ## 快速开始
 
@@ -40,6 +54,10 @@ cd Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
 .\scripts\5-build.ps1  -TensorFold D:\llm\latest\TensorFold          # BUILD_EXIT=0，约 5 分钟
 .\scripts\6-smoke.ps1  -TensorFold D:\llm\latest\TensorFold          # version 1.1.4 / nvidia-sm121 / OK
 ```
+
+两个克隆都是**钉版本**，不是跟分支：引擎钉 `v1.1.4`，配方钉在补丁 `0001` 所对应的那个提交（见
+[`VERSIONS.md`](VERSIONS.md)）。若配方的 `main` 已经走过该提交，`2-clone.ps1` 会给出告警；
+只有你确实想跟随时才传 `-RecipeRef ''`。
 
 起服务。克隆下来的配方里是 `.sh`，把 PowerShell 那四个拷进去：
 

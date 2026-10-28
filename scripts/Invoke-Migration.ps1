@@ -8,6 +8,11 @@
     powershell -ExecutionPolicy Bypass -File scripts\Invoke-Migration.ps1 -SkipClone    # patches applied already? no: patch step still checks
 
   Every step is a separate script; run one on its own when you need to inspect its output.
+
+  Both repositories are pinned, not followed (VERSIONS.md):
+    engine -TfRef     eab85828 = TensorFold v1.1.4
+    recipe -RecipeRef fd3f43e  = the commit the merged recipe patch was cut from
+  Pass -RecipeRef '' to follow the recipe's main instead.
 #>
 param(
     [string]$Root      = 'D:\llm\latest',
@@ -15,6 +20,7 @@ param(
     [string]$Cuda      = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4',
     [string]$Vcvars    = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat',
     [string]$TfRef     = 'eab8582819688325e371907e4706e1c602b8a273',
+    [string]$RecipeRef = 'fd3f43e11238553685ebb68b6d8ab2b112818e3c',
     [int]$Sm           = 121,
     [switch]$SkipPreflight,
     [switch]$SkipVenv,
@@ -33,7 +39,7 @@ if (-not $SkipPreflight) {
     if ($LASTEXITCODE -ne 0) { Stop-Here '1-preflight' }
 }
 
-& (Join-Path $here '2-clone.ps1') -Root $Root -TfRef $TfRef -Force:$Force
+& (Join-Path $here '2-clone.ps1') -Root $Root -TfRef $TfRef -RecipeRef $RecipeRef -Force:$Force
 if ($LASTEXITCODE -ne 0) { Stop-Here '2-clone' }
 
 & (Join-Path $here '3-apply-patches.ps1') -TensorFold $TensorFold -TfRef $TfRef
