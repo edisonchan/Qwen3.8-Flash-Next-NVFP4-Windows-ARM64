@@ -551,12 +551,26 @@ Linux 那套"环境优先、`.env` 只补空缺"的语义会让旧默认值反�
 所以补齐属于**正确性**，不是调优。现在的 `config.ps1` 导出 21 个 `TF_FLASHNEXT_*`，与 `config.sh`
 一一对应，每项都仍可被 `.env` 覆盖。
 
-但有一条必须如实记下：**补齐后本机单流 decode 没有变快，反而慢了**——greedy code `c1` 从 86.4 掉到
-76.9 tok/s，`c2` 123.5 → 112.1，`c4` 159.1 → 149.0，itlP95 40 → 46 ms，而 MTP 接受率基本没动
-（71.7% → 72.4%），各 3 轮取中位。说明这 21 项里至少有一项在 Windows/WDDM 上是负收益（嫌疑：
-`SHARED_SIDE` 开第二条 CUDA stream、`GATHER_READ=pread`、`PROMPT_GEMM2`），因此"比页面慢 20–30%
-全怪漏了这些开关"这个归因**目前并不成立**，要逐项二分（每项一次重启）才能定论。
-配方 README 里那些 +14% / 15–25% 是它自己 Linux 镜像上的数字，不能当作 Windows 上的预期。
+补齐之后还有一件必须如实记下的事，因为它决定了默认值：**配方这套开关在本机单流 decode 上是净损失**。
+2026-10-28 逐项二分（9 组配置，每组一次重启、3 遍取最快，脚本与报告见 `sweep-decode.ps1` /
+`decode-c1.txt`）：
+
+| 组合 | greedy code 单流 |
+|---|---|
+| 全关（补齐之前的行为） | 90.3 tok/s |
+| 配方全开 | 77.7 |
+| 单开 `GATHER_READ=pread`（连带 `DRAFT_AHEAD`） | 80.8 |
+| 单开 `KEEP_LATE` + `GDN_LANES` | **91.8**（最快） |
+| 其余四项单项 | 89.4–91.0，全在 ±1% 噪声内 |
+
+14% 的损失几乎全来自 `GATHER_READ=pread`——Windows 上是每行一次 `ReadFile`+`OVERLAPPED`，
+不是 Linux 那种映射页错误；只有 `KEEP_LATE`+`GDN_LANES` 站得住。所以 `config.ps1` 现在的默认值是
+**本机实测的最优组合**，而不是 `config.sh` 的那一套：导出清单与 `config.sh` 一一对应（差集为空），
+取值不同，文件头的注释写了每一组数字和理由。配方 README 里那些 +14% / 15–25% 是它自己 Linux 镜像
+上的数字，不能当作 Windows 上的预期。
+
+prefill 一侧仍在扫（目标：32k / 32,807 prompt tokens 上 2,735 tok/s），`PROMPT_*`、`PREFILL_TAIL`、
+`WARM_AHEAD` 暂时保留配方值，等那轮结果出来再定。
 
 **验收办法**（新机器上必做一次）：
 

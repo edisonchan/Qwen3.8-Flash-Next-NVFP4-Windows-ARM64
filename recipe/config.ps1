@@ -92,31 +92,42 @@ $MemCheck    = ((Get-Setting 'MEM_CHECK' '1') -ne '0')
 $Foreground  = ((Get-Setting 'FOREGROUND' '0') -eq '1')
 
 # ---- engine environment (exported: the spawned server inherits these, like config.sh) ----
-# Parity with scripts/config.sh, not taste. Every variable below is one config.sh exports, and the
-# engine reads an unset one as "off" or as its stock rule -- so a port that skips them does not run
-# the same engine, it runs a different one. Values are config.sh's defaults; .env can still override
-# any of them. Percentages quoted below are the recipe's own measurements (its README, taken on the
-# Linux image). This port has only measured the set as a whole, and on 2026-10-28 that set was NOT
-# faster at one stream (greedy code 76.9 vs 86.4 tok/s, itlP95 40 -> 46 ms), so none of these is
-# credited with a win on Windows until one is bisected here. Set them because they are the recipe's
-# configuration, not because they have been shown to help on this OS.
+# Every variable below is one scripts/config.sh exports, and the engine reads an unset one as "off"
+# or as its stock rule -- so a port that skips them does not run the same engine, it runs a
+# different one. The VALUES, though, are this machine's, not config.sh's.
+#
+# Measured 2026-10-28, one stream, greedy code, best of three passes a run, one engine restart a
+# run (sweep-decode.ps1 -> decode-c1.txt): config.sh's whole set gave 77.7 tok/s, all of it off gave
+# 90.3. GATHER_READ=pread alone is the whole 14% (80.8 with it, 90.3 without) and drags the rest
+# down with it. Two switches do survive: KEEP_LATE and GDN_LANES (91.8 together, the best of the
+# nine combinations tried). So what ships here is the fastest set for WDDM, not the recipe's set.
+# config.sh's own figures (+14% greedy code at one stream, 15-25% a prompt call) are its Linux
+# image's and do not transfer. Still at config.sh's value and still unmeasured here: the prefill
+# switches (a prefill sweep follows) and PRODUCT_STREAMS.
 $Yarn = [int](Get-Setting 'TF_FLASHNEXT_YARN' $(if ($Context -gt 262144) { 4 } else { 0 }))
 Set-EnvVar 'TF_FLASHNEXT_YARN' $Yarn
 # MTP: up to 6 drafts a round (also the engine default; spelled out because config.sh does).
 Set-EnvVar 'TF_FLASHNEXT_DRAFTS' (Get-Setting 'TF_FLASHNEXT_DRAFTS' 6)
+# config.sh ships 5, the engine's stock is 2, and this port has not bisected it either way.
 Set-EnvVar 'TF_FLASHNEXT_PRODUCT_STREAMS' (Get-Setting 'TF_FLASHNEXT_PRODUCT_STREAMS' 5)
-# Sampled requests drafted in one batched pass, candidates picked on the GPU, all lanes'
-# n-gram rows gathered together, host draws on worker threads (patches 0007/0008/0011).
-Set-EnvVar 'TF_FLASHNEXT_SAMPLED_HEADS' (Get-Setting 'TF_FLASHNEXT_SAMPLED_HEADS' 1)
-Set-EnvVar 'TF_FLASHNEXT_SAMPLE_CAND' (Get-Setting 'TF_FLASHNEXT_SAMPLE_CAND' 1)
-Set-EnvVar 'TF_FLASHNEXT_GATHER_EARLY' (Get-Setting 'TF_FLASHNEXT_GATHER_EARLY' 1)
-Set-EnvVar 'TF_FLASHNEXT_HOST_DRAW_THREADS' (Get-Setting 'TF_FLASHNEXT_HOST_DRAW_THREADS' 7)
+# Off: the batched sampled draft, the GPU candidate pick, the pooled n-gram gather and the
+# worker-thread draws (patches 0007/0008/0011) were 1.0-1.7 tok/s on WDDM, inside the noise floor
+# a repeat run of one configuration sets (0.5%).
+Set-EnvVar 'TF_FLASHNEXT_SAMPLED_HEADS' (Get-Setting 'TF_FLASHNEXT_SAMPLED_HEADS' 0)
+Set-EnvVar 'TF_FLASHNEXT_SAMPLE_CAND' (Get-Setting 'TF_FLASHNEXT_SAMPLE_CAND' 0)
+Set-EnvVar 'TF_FLASHNEXT_GATHER_EARLY' (Get-Setting 'TF_FLASHNEXT_GATHER_EARLY' 0)
+Set-EnvVar 'TF_FLASHNEXT_HOST_DRAW_THREADS' (Get-Setting 'TF_FLASHNEXT_HOST_DRAW_THREADS' 0)
 # A partly rejected draft window keeps its rows in a log instead of replaying DeltaNet (0012).
+# On: 91.8 tok/s with it, 90.3 without -- the only pair that beat the baseline twice.
 Set-EnvVar 'TF_FLASHNEXT_KEEP_LATE' (Get-Setting 'TF_FLASHNEXT_KEEP_LATE' 1)
-# n-gram rows by positional reads from a pool that reads ahead (0013). Windows has a pread
-# of its own (zig/src/platform/win_c.zig, ReadFile + OVERLAPPED), so the same value applies.
-Set-EnvVar 'TF_FLASHNEXT_GATHER_READ' (Get-Setting 'TF_FLASHNEXT_GATHER_READ' 'pread')
-Set-EnvVar 'TF_FLASHNEXT_DRAFT_AHEAD' (Get-Setting 'TF_FLASHNEXT_DRAFT_AHEAD' 1)
+# n-gram rows by positional reads from a pool that reads ahead (0013). OFF, and this is the one
+# measurement that matters most here: pread costs 10.5 tok/s (80.8 vs 90.3) on Windows, where it is
+# ReadFile+OVERLAPPED per row (zig/src/platform/win_c.zig) rather than a mapped page fault. The
+# value stays a value, not a flag: only the literal 'pread' turns it on, so '0' is safely off.
+Set-EnvVar 'TF_FLASHNEXT_GATHER_READ' (Get-Setting 'TF_FLASHNEXT_GATHER_READ' '0')
+Set-EnvVar 'TF_FLASHNEXT_DRAFT_AHEAD' (Get-Setting 'TF_FLASHNEXT_DRAFT_AHEAD' 0)
+# Prompt-side switches below: still config.sh's values, pending a prefill sweep against the
+# recipe's 2,735 tok/s at 32k. WARM_AHEAD and PREFILL_TAIL only run in prompt passes.
 Set-EnvVar 'TF_FLASHNEXT_WARM_AHEAD' (Get-Setting 'TF_FLASHNEXT_WARM_AHEAD' 1)
 Set-EnvVar 'TF_FLASHNEXT_PREFILL_TAIL' (Get-Setting 'TF_FLASHNEXT_PREFILL_TAIL' 512)
 # Prompt passes (0014): fused hyper-connection/GEMM, straight-to-y shared expert, routed
@@ -125,19 +136,18 @@ Set-EnvVar 'TF_FLASHNEXT_PROMPT_HC2' (Get-Setting 'TF_FLASHNEXT_PROMPT_HC2' 1)
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_SHARED_DIRECT' (Get-Setting 'TF_FLASHNEXT_PROMPT_SHARED_DIRECT' 1)
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_EXPERT_TILE_ROWS' (Get-Setting 'TF_FLASHNEXT_PROMPT_EXPERT_TILE_ROWS' 256)
 Set-EnvVar 'TF_FLASHNEXT_HEAD_PIECE' (Get-Setting 'TF_FLASHNEXT_HEAD_PIECE' 1536)
-# The two-stage MX128 prompt tile (0015): same bits as the one-stage tile, 15-25% faster a call
-# (the recipe's figure, Linux image).
+# The two-stage MX128 prompt tile (0015).
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_GEMM2' (Get-Setting 'TF_FLASHNEXT_PROMPT_GEMM2' 1)
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_EXPERT_TILE' (Get-Setting 'TF_FLASHNEXT_PROMPT_EXPERT_TILE' 2)
-# Decode rounds (0016): shared expert on a side stream, DeltaNet rows in three launches a
-# layer instead of five a lane. GDN_LANES needs KEEP_LATE=1.
-Set-EnvVar 'TF_FLASHNEXT_SHARED_SIDE' (Get-Setting 'TF_FLASHNEXT_SHARED_SIDE' 1)
+# Decode rounds (0016): DeltaNet rows in three launches a layer instead of five a lane. GDN_LANES
+# needs KEEP_LATE=1. The side stream for the shared expert is off: 89.4 tok/s, 1.0% under baseline.
+Set-EnvVar 'TF_FLASHNEXT_SHARED_SIDE' (Get-Setting 'TF_FLASHNEXT_SHARED_SIDE' 0)
 Set-EnvVar 'TF_FLASHNEXT_GDN_LANES' (Get-Setting 'TF_FLASHNEXT_GDN_LANES' 1)
-# Draft chain stop rule (0017): running product >= 0.4 while up to 5 streams draft together.
-# v1.1.4's stock rule is a per-draft floor of 0.6; only the draft row count changes, never a
-# reply. The recipe's README: greedy code +14% at one stream, +10% at three, +4% at five, prose
-# flat -- on its Linux image. Not reproduced on Windows yet (see the block comment above).
-Set-EnvVar 'TF_FLASHNEXT_CONFIDENCE' (Get-Setting 'TF_FLASHNEXT_CONFIDENCE' '-0.4')
+# Draft chain stop rule (0017): a running product >= 0.4 while up to 5 streams draft together,
+# where v1.1.4's stock rule is a per-draft floor of 0.6. Only the draft row count changes, never a
+# reply. 0.6 (stock) here: -0.4 measured 90.6, i.e. inside the noise floor, while the recipe's
+# Linux image claims +14% with it.
+Set-EnvVar 'TF_FLASHNEXT_CONFIDENCE' (Get-Setting 'TF_FLASHNEXT_CONFIDENCE' 0.6)
 Set-EnvVar 'TENSORFOLD_MAX_IMAGES' (Get-Setting 'TENSORFOLD_MAX_IMAGES' 50)
 Set-EnvVar 'TENSORFOLD_IMAGE_TOKENS' (Get-Setting 'TENSORFOLD_IMAGE_TOKENS' 16384)
 Set-EnvVar 'TENSORFOLD_VIDEO_TOKENS' (Get-Setting 'TENSORFOLD_VIDEO_TOKENS' 16384)
