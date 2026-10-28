@@ -584,9 +584,13 @@ prefill 一侧同一天扫完（`sweep-prefill.ps1` → `prefill-32k.txt`），�
 | 配方整套 | 731 |
 
 两组效果**可叠加**且各自显著，`WARM_AHEAD` 与 `PREFILL_TAIL` 在 32k 上不起作用，于是默认值取 0
-（等于引擎出厂值）。剩余 16% 的差距已不在这批开关里，下一批候选是 `TF_FLASHNEXT_CHUNK`（默认
-3072 行/次，上限 16384，但 scratch 多约 13 GiB）、`PROMPT_MX128`（默认 1024）、`PRODUCT_STREAMS`
-（配方 5、引擎默认 2，本机从未测过）。
+（等于引擎出厂值）。剩余 16% 的差距已不在这批开关里。后来的三轮（`prefill-stage2.txt`、
+`prefill-stage3.txt`、`decode-c4.txt`）把剩下的候选全部扫完并**关死**：`CHUNK`、`PROMPT_MX128`、
+`PRODUCT_STREAMS` 全在噪声内（唯一有真数字的 `CHUNK=8192` 是 +0.77%，要为它把 reserve 从 4 压到
+2，不划算——顺带更正早期笔记里"16384 多 13 GiB scratch"的错判，实测只多 0.62 GiB，13 GiB 是源码
+注释里 max_chunk=16384 的口径）；专家 tile 的 kernel 实例选择器 `PROMPT_EXPERT_TILE_CFG` 证明出厂
+64,1,2 是局部最优；4 流下同样没有任何开关动得了聚合吞吐。**全部判定冻结在 `docs/knobs.md`**——
+每个导出变量一行，带取值、证据和置信度，改值之前先在 sweep harness 里打败那张表里的数字。
 
 **验收办法**（新机器上必做一次）：
 

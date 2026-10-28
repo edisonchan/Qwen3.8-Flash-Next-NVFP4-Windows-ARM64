@@ -36,6 +36,7 @@ ARM64——**NVIDIA RTX Spark**（GB10，128 GB 统一内存，`sm_121`）——
 | `recipe/start.ps1`、`stop.ps1`、`config.ps1`、`banner.ps1` | 配方 shell 脚本的 PowerShell 版，含两个 PowerShell 5.1 的真 bug 修复（`[string]` 默认值把 `$null` 变成空串；5.1 的 `Invoke-RestMethod` 默认动词是 POST）。`config.ps1` 只有一个权重预设——FP4 那份——别的 `CHECKPOINT` 一律拒绝 |
 | `SKILL.md`、`references/` | 同一套流程的 agent 可执行形态（WorkBuddy / Claude skill 布局），外加构建笔记与验证记录 |
 | `docs/patching-and-port.md` | 长文：每份补丁怎么切出来的、踩了什么、`.sh → .ps1` 的取舍逐条 |
+| `docs/knobs.md` | 引擎旋钮的冻结表：每个导出变量的取值、实测证据与置信度，外加「绝不能开」清单、看着能调其实不能调的假旋钮、以及再次扫描时的测量纪律 |
 | `NOTICE`、`LICENSES/`、`CREDITS.md` | 许可链。二次分发前先读 `NOTICE` |
 | `VERSIONS.md` | 钉死的引擎 / 配方 / 权重 / 工具链版本、补丁哈希，以及挪动任一版本会坏在哪 |
 
@@ -176,6 +177,22 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 
 判断「双缓冲够不够」只看 `stage wait` 一个指标：67.6 秒里它只占 0.87 秒。哪天它涨到几个百分点，
 先调 `TENSORFOLD_LOAD_GROUP`，不要去碰 CUDA。
+
+## 吞吐：用 sparkDash 实测
+
+用 sparkDash 测——和上游配方页面跑的是同一套基准（`Decode, code`：code 提示词、temperature 0、
+关思考；prefill：单条冷启动 32k 请求）。每个配置重启引擎、跑三遍取最快；`config.ps1` 现在导出的
+就是这些扫描定下来的取值（每个旋钮的取值、证据与置信度，见 [`docs/knobs.md`](docs/knobs.md)）。
+
+| 基准 | 配方页面（Linux） | 本移植（WDDM） |
+|---|---|---|
+| decode 单流 | 110.5 tok/s | **91.8 tok/s**（−17%） |
+| decode 4 流 | — | **176.5 tok/s** 聚合（单流 47.6） |
+| prefill 32k | 2,735 tok/s | **2,291 tok/s**（−16%） |
+
+两个差距是同一个差距：prompt 每行约 0.409 ms、解码每 token 约 10.9 ms，落在 WDDM 驱动栈的
+kernel 里面。四轮共 23 个配置的扫描没能撼动这两个数字中的任何一个——把配方整套开关搬回来更是
+直接负收益（`GATHER_READ=pread` 单项就能让 prefill 慢 2.6 倍）。
 
 ## 环境要求
 

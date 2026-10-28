@@ -46,6 +46,7 @@ the same tree that was measured; [`VERSIONS.md`](VERSIONS.md) explains each pin 
 | `recipe/start.ps1`, `stop.ps1`, `config.ps1`, `banner.ps1` | The recipe's shell scripts as PowerShell, including two PowerShell 5.1 bug fixes (`$null` becomes `''` in a `[string]` default; 5.1's `Invoke-RestMethod` defaults to POST). `config.ps1` carries one checkpoint preset — the FP4 export — and refuses any other `CHECKPOINT` |
 | `SKILL.md`, `references/` | The same procedure in agent-facing form (WorkBuddy/Claude skill layout), plus build notes and the verification record |
 | `docs/patching-and-port.md` | Long form: how each patch was cut, what broke, and the `.sh` → `.ps1` decisions one by one |
+| `docs/knobs.md` | The frozen engine-knob table: every exported variable with its value, its measurement, and its confidence — plus the must-not list, the knobs that are not knobs, and the measurement rules for sweeping again |
 | `NOTICE`, `LICENSES/`, `CREDITS.md` | License chain. Read `NOTICE` before redistributing anything |
 | `VERSIONS.md` | The pinned engine / recipe / checkpoint / toolchain, the patch hashes, and what breaks if a pin moves |
 
@@ -190,6 +191,23 @@ to 48 (a layer's 14 shards stay held, instead of being reopened and re-parsed pe
 
 `stage wait` is the metric that tells you whether the double buffer is big enough: 0.87 s of 67.6 s. If it
 climbs past a few percent, raise `TENSORFOLD_LOAD_GROUP` before touching anything in CUDA.
+
+## Throughput, measured with sparkDash
+
+Measured with sparkDash — the same benchmark the upstream recipe's page runs (`Decode, code`: code
+prompt, temperature 0, thinking off; prefill: one cold 32k request). Best of three passes, engine
+restarted per configuration; the shipped `config.ps1` values are what those sweeps settled on
+(every knob, its evidence and confidence: [`docs/knobs.md`](docs/knobs.md)).
+
+| bench | recipe page (Linux) | this port (WDDM) |
+|---|---|---|
+| decode, 1 stream | 110.5 tok/s | **91.8 tok/s** (−17%) |
+| decode, 4 streams | — | **176.5 tok/s** aggregate (47.6 a stream) |
+| prefill, 32k | 2,735 tok/s | **2,291 tok/s** (−16%) |
+
+The two gaps are the same gap: ~0.409 ms a prompt row and ~10.9 ms a token, inside the kernels on
+the WDDM driver stack. Twenty-three swept configurations (four sweeps, 2026-10-28) moved neither —
+`GATHER_READ=pread` alone costs 2.6× on prefill if you re-enable the recipe's set wholesale.
 
 ## Requirements
 
