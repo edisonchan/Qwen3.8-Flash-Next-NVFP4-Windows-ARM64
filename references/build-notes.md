@@ -182,7 +182,7 @@ TMP / TEMP           = <TF>\build\tmp
 | `--kv-dtype` → `--kv-cache` | v1.1.4 改名。`start.sh`（Linux）已用新名，Windows 版 `start.ps1` 曾是旧名，症状是 `argument --kv-dtype: invalid choice: 'fp8'` |
 | AOT 核集（`TENSORFOLD_CUDA_KERNELS`） | 引擎优先用它，其次用可执行文件旁的 `share\tensorfold\cuda\sm<cap>`，最后才用内嵌 fatbin。旧引擎留下的核集缺 fp8 KV 支持，报 `Fp8KvUnsupported` |
 | 变量"存在但为空" | `aot.pick()` 只要变量非 null 就走"当作目录"分支，空串既不是 `native` 也没有 `aot.json` → `TENSORFOLD_CUDA_KERNELS= holds no aot.json`。要内嵌核集就给字面量 `native` |
-| checkpoint 格式 | v1.1.4 的 Flash Next CUDA 路径只接受 `quant_method=modelopt` + `quant_algo=MIXED_PRECISION`；GPTQ 的 INT4-AutoRound 会被 `UnsupportedCheckpoint` 拒绝 |
+| checkpoint 格式 | v1.1.4 的 Flash Next CUDA 路径只接受 `quant_method=modelopt` + `quant_algo=MIXED_PRECISION`；GPTQ 的 INT4-AutoRound 会被 `UnsupportedCheckpoint` 拒绝——引擎已移除那条量化路径，所以本 repo 只支持 `nvidia/Qwen3.8-Flash-Next-FP4-Local` |
 | `kernels embedded true` | 冒烟里 `tf-cuda-test info` 的这一项说明不需要外部核集；为 `false` 时才需要 `tools/zig/flashnext_aot.py` |
 | 内存 | 权重 81 GiB 走 GPU pool，系统侧只需几 GiB 缓冲；`start.ps1` 的内存判断是告警不阻断 |
 | 加载慢（257 s） | 原生路径每层**现场装配**专家，单线程 + 2 槽映射缓存；`0003` 补丁修掉，见第 5 章 |

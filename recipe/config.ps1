@@ -37,32 +37,31 @@ if (Test-Path $envFile) {
     }
 }
 
-# ---- checkpoint presets (local model directories; MODEL_PATH overrides) ----
+# ---- checkpoint (a local model directory; MODEL_PATH overrides) ----
+# One checkpoint, the NVFP4 export. It is not shipped: nvidia/Qwen3.8-Flash-Next-FP4-Local on Hugging Face
+# (revision b9ce18a6), mirrored at https://www.modelscope.cn/models/nv-community/Qwen3.8-Flash-Next-FP4-Local.
+# From either host, check config.json says quant_method=modelopt and quant_algo=MIXED_PRECISION: the v1.1.4
+# CUDA engine loads nothing else, and a GPTQ re-upload of the same model fails the same way. The AutoRound
+# INT4 conversions are GPTQ -- a quantization path TensorFold dropped -- so they are not supported here;
+# there is no preset for them, and this check refuses one before loading instead of after 48 layers.
 # WEIGHTS_GIB is what loading takes of memory (measured on the Zig engine, config.sh).
-# The nvfp4 weights are not shipped: nvidia/Qwen3.8-Flash-Next-FP4-Local on Hugging Face (revision b9ce18a6),
-# mirrored at https://www.modelscope.cn/models/nv-community/Qwen3.8-Flash-Next-FP4-Local. From either host,
-# check config.json says quant_method=modelopt and quant_algo=MIXED_PRECISION -- a GPTQ re-upload (the int4
-# preset below) is refused at load with UnsupportedCheckpoint.
 $CHECKPOINT = Get-Setting 'CHECKPOINT' 'nvfp4'
 # Fallback only: .env normally carries MODEL_PATH (scripts\recipe\1-install-ps1.ps1 writes it from
 # the path menu). Derived as <parent of the recipe>\model so no drive letter is baked in here.
 $ModelRoot  = Join-Path (Split-Path -Parent $RecipeDir) 'model'
-switch ($CHECKPOINT) {
-    'nvfp4' {
-        $ModelPath  = Get-Setting 'MODEL_PATH' (Join-Path $ModelRoot 'Qwen3.8-Flash-Next-FP4-Local')
-        $WeightsGiB = [double](Get-Setting 'WEIGHTS_GIB' 81)
-        $QuantLabel = 'NVIDIA FP4 QAD: NVFP4 experts, MXFP8'
-    }
-    'int4' {
-        # The v1.1.4 Flash Next CUDA engine accepts only `quantization_config.quant_method = modelopt` with
-        # `quant_algo = MIXED_PRECISION` (NVFP4 routed experts, MXFP8 shared experts and attention projections).
-        # azampatti's INT4-AutoRound checkpoint is GPTQ: the engine refuses it at load with UnsupportedCheckpoint.
-        # The preset stays for the record (the Linux image's older engine took it); on Windows use nvfp4.
-        $ModelPath  = Get-Setting 'MODEL_PATH' (Join-Path $ModelRoot 'Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound')
-        $WeightsGiB = [double](Get-Setting 'WEIGHTS_GIB' 66)
-        $QuantLabel = 'INT4-AutoRound (NOT loadable by the v1.1.4 CUDA engine: GPTQ, not modelopt)'
-    }
-    default { Write-Host "CHECKPOINT is nvfp4 or int4, not $CHECKPOINT" -ForegroundColor Red; exit 1 }
+if ($CHECKPOINT -eq 'nvfp4') {
+    $ModelPath  = Get-Setting 'MODEL_PATH' (Join-Path $ModelRoot 'Qwen3.8-Flash-Next-FP4-Local')
+    $WeightsGiB = [double](Get-Setting 'WEIGHTS_GIB' 81)
+    $QuantLabel = 'NVIDIA FP4 QAD: NVFP4 experts, MXFP8'
+} else {
+    # Any other value names a checkpoint this engine cannot load. Leave the path empty and let start.ps1
+    # -- the only caller that needs the weights -- refuse with the reason. Dying here would not work
+    # anyway: 'exit' in a dot-sourced file only ends that file, returning control to the caller, so
+    # start.ps1 would run on with an undefined path. It would also take out stop.ps1, which
+    # dot-sources this file and has no interest in the checkpoint.
+    $ModelPath  = $null
+    $WeightsGiB = 0
+    $QuantLabel = "CHECKPOINT=$CHECKPOINT (unsupported)"
 }
 
 # ---- engine binary and venv (all inside the clean latest tree) ----
@@ -93,12 +92,52 @@ $MemCheck    = ((Get-Setting 'MEM_CHECK' '1') -ne '0')
 $Foreground  = ((Get-Setting 'FOREGROUND' '0') -eq '1')
 
 # ---- engine environment (exported: the spawned server inherits these, like config.sh) ----
+# Parity with scripts/config.sh, not taste. Every variable below is one config.sh exports, and the
+# engine reads an unset one as "off" or as its stock rule -- so a port that skips them does not run
+# the same engine, it runs a different one. Values are config.sh's defaults; .env can still override
+# any of them. Percentages quoted below are the recipe's own measurements (its README, taken on the
+# Linux image). This port has only measured the set as a whole, and on 2026-10-28 that set was NOT
+# faster at one stream (greedy code 76.9 vs 86.4 tok/s, itlP95 40 -> 46 ms), so none of these is
+# credited with a win on Windows until one is bisected here. Set them because they are the recipe's
+# configuration, not because they have been shown to help on this OS.
 $Yarn = [int](Get-Setting 'TF_FLASHNEXT_YARN' $(if ($Context -gt 262144) { 4 } else { 0 }))
 Set-EnvVar 'TF_FLASHNEXT_YARN' $Yarn
-Set-EnvVar 'TF_FLASHNEXT_DEPTH' (Get-Setting 'TF_FLASHNEXT_DEPTH' 6)
+# MTP: up to 6 drafts a round (also the engine default; spelled out because config.sh does).
+Set-EnvVar 'TF_FLASHNEXT_DRAFTS' (Get-Setting 'TF_FLASHNEXT_DRAFTS' 6)
 Set-EnvVar 'TF_FLASHNEXT_PRODUCT_STREAMS' (Get-Setting 'TF_FLASHNEXT_PRODUCT_STREAMS' 5)
+# Sampled requests drafted in one batched pass, candidates picked on the GPU, all lanes'
+# n-gram rows gathered together, host draws on worker threads (patches 0007/0008/0011).
+Set-EnvVar 'TF_FLASHNEXT_SAMPLED_HEADS' (Get-Setting 'TF_FLASHNEXT_SAMPLED_HEADS' 1)
+Set-EnvVar 'TF_FLASHNEXT_SAMPLE_CAND' (Get-Setting 'TF_FLASHNEXT_SAMPLE_CAND' 1)
+Set-EnvVar 'TF_FLASHNEXT_GATHER_EARLY' (Get-Setting 'TF_FLASHNEXT_GATHER_EARLY' 1)
+Set-EnvVar 'TF_FLASHNEXT_HOST_DRAW_THREADS' (Get-Setting 'TF_FLASHNEXT_HOST_DRAW_THREADS' 7)
+# A partly rejected draft window keeps its rows in a log instead of replaying DeltaNet (0012).
+Set-EnvVar 'TF_FLASHNEXT_KEEP_LATE' (Get-Setting 'TF_FLASHNEXT_KEEP_LATE' 1)
+# n-gram rows by positional reads from a pool that reads ahead (0013). Windows has a pread
+# of its own (zig/src/platform/win_c.zig, ReadFile + OVERLAPPED), so the same value applies.
+Set-EnvVar 'TF_FLASHNEXT_GATHER_READ' (Get-Setting 'TF_FLASHNEXT_GATHER_READ' 'pread')
+Set-EnvVar 'TF_FLASHNEXT_DRAFT_AHEAD' (Get-Setting 'TF_FLASHNEXT_DRAFT_AHEAD' 1)
+Set-EnvVar 'TF_FLASHNEXT_WARM_AHEAD' (Get-Setting 'TF_FLASHNEXT_WARM_AHEAD' 1)
 Set-EnvVar 'TF_FLASHNEXT_PREFILL_TAIL' (Get-Setting 'TF_FLASHNEXT_PREFILL_TAIL' 512)
+# Prompt passes (0014): fused hyper-connection/GEMM, straight-to-y shared expert, routed
+# experts on shared-memory row tiles from 256 rows, MTP head in 1536-row pieces.
+Set-EnvVar 'TF_FLASHNEXT_PROMPT_HC2' (Get-Setting 'TF_FLASHNEXT_PROMPT_HC2' 1)
+Set-EnvVar 'TF_FLASHNEXT_PROMPT_SHARED_DIRECT' (Get-Setting 'TF_FLASHNEXT_PROMPT_SHARED_DIRECT' 1)
+Set-EnvVar 'TF_FLASHNEXT_PROMPT_EXPERT_TILE_ROWS' (Get-Setting 'TF_FLASHNEXT_PROMPT_EXPERT_TILE_ROWS' 256)
+Set-EnvVar 'TF_FLASHNEXT_HEAD_PIECE' (Get-Setting 'TF_FLASHNEXT_HEAD_PIECE' 1536)
+# The two-stage MX128 prompt tile (0015): same bits as the one-stage tile, 15-25% faster a call
+# (the recipe's figure, Linux image).
+Set-EnvVar 'TF_FLASHNEXT_PROMPT_GEMM2' (Get-Setting 'TF_FLASHNEXT_PROMPT_GEMM2' 1)
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_EXPERT_TILE' (Get-Setting 'TF_FLASHNEXT_PROMPT_EXPERT_TILE' 2)
+# Decode rounds (0016): shared expert on a side stream, DeltaNet rows in three launches a
+# layer instead of five a lane. GDN_LANES needs KEEP_LATE=1.
+Set-EnvVar 'TF_FLASHNEXT_SHARED_SIDE' (Get-Setting 'TF_FLASHNEXT_SHARED_SIDE' 1)
+Set-EnvVar 'TF_FLASHNEXT_GDN_LANES' (Get-Setting 'TF_FLASHNEXT_GDN_LANES' 1)
+# Draft chain stop rule (0017): running product >= 0.4 while up to 5 streams draft together.
+# v1.1.4's stock rule is a per-draft floor of 0.6; only the draft row count changes, never a
+# reply. The recipe's README: greedy code +14% at one stream, +10% at three, +4% at five, prose
+# flat -- on its Linux image. Not reproduced on Windows yet (see the block comment above).
+Set-EnvVar 'TF_FLASHNEXT_CONFIDENCE' (Get-Setting 'TF_FLASHNEXT_CONFIDENCE' '-0.4')
 Set-EnvVar 'TENSORFOLD_MAX_IMAGES' (Get-Setting 'TENSORFOLD_MAX_IMAGES' 50)
 Set-EnvVar 'TENSORFOLD_IMAGE_TOKENS' (Get-Setting 'TENSORFOLD_IMAGE_TOKENS' 16384)
 Set-EnvVar 'TENSORFOLD_VIDEO_TOKENS' (Get-Setting 'TENSORFOLD_VIDEO_TOKENS' 16384)

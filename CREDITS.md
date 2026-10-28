@@ -2,8 +2,10 @@
 
 > Reproduced from MiaAI-Lab's repository
 > ([`Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold`](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold),
-> commit `fd3f43e`) as the record of whose work this build depends on, left otherwise unedited. The port's own
-> additions are listed in [`NOTICE`](NOTICE) sections 1 and 5.
+> commit `fd3f43e`) as the record of whose work this build depends on. Two departures from upstream's text: the
+> checkpoint list is narrowed to the one the engine can load (see the last bullet of "Model"), and "Hardware" also
+> describes the Windows machine this port was measured on. The port's own additions are listed in
+> [`NOTICE`](NOTICE) sections 1 and 5.
 
 This repository is a thin layer of scripts. Almost everything that makes it work was built by others. Its own work is
 licensed under the MIT License ([`LICENSE`](LICENSE)). The image `scripts/prepare.sh` builds also carries TensorFold's
@@ -16,26 +18,20 @@ license files from the pinned checkout.
   and its MTP head. Its license, the
   [Qwen Community License 1.0](https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE), comes with the
   weights.
-- **NVIDIA** ([nvidia](https://huggingface.co/nvidia)): the checkpoint this recipe serves by default,
+- **NVIDIA** ([nvidia](https://huggingface.co/nvidia)): the checkpoint this port serves, and the only one it
+  can serve,
   [`nvidia/Qwen3.8-Flash-Next-FP4-Local`](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-FP4-Local): Qwen3.8 Flash Next quantized with
   quantization-aware distillation (QAD) against the bf16 model as teacher, using NVIDIA Model Optimizer: NVFP4 routed experts with CSF-compressed
   scale factors, MXFP8 attention, DeltaNet and shared-expert linears, an NVFP4 n-gram table and quantized MTP and vision towers. On NVIDIA's own
   numbers it scores 91.5% on GPQA Diamond and 88.7% on ToolEvalBench against 92.2% and 89.4% for bf16 (its model card, not measured here). Used under the
   [NVIDIA Open Model Agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-agreement/); the base model's
   Qwen Community License 1.0 applies as well.
-- **azampatti** ([azampatti](https://huggingface.co/azampatti)): the optional INT4 checkpoint (`CHECKPOINT=int4`),
-  [`azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound`](https://huggingface.co/azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound):
-  azampatti authored its top-5 expert cut, the shared-expert healing, and the checkpoint. Under the license on
-  its model card (the Qwen license).
-- **Intel** ([Intel](https://huggingface.co/Intel)): the AutoRound int4 quantization the INT4-AR checkpoint is built on,
-  [`Intel/Qwen3.8-Flash-Next-W4A16-AutoRound`](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound).
-- **Saren-Arterius** ([Saren-Arterius](https://github.com/Saren-Arterius)): the hybrid checkpoint the INT4-AR
-  checkpoint is built from and its FP8 n-gram table,
-  [`Saren/Qwen3.8-Flash-Next-ple-table-fp8`](https://huggingface.co/Saren/Qwen3.8-Flash-Next-ple-table-fp8) (in its
-  `ple-table/`). The recipe uses their weights only, no code from their repositories.
-- **[Vontra](https://huggingface.co/Vontra)**: the checkpoint this recipe served before the Zig engine,
-  [`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP): the MLX
-  4-bit conversion, the preserved native MTP draft head, validation and packaging.
+- **Outside this port.** The upstream recipe could also serve an AutoRound INT4 conversion of the same model
+  (**azampatti**, built on **Intel**'s AutoRound W4A16 on top of **Saren-Arterius**'s hybrid checkpoint), and
+  before the Zig engine it served **Vontra**'s MLX 4-bit conversion. TensorFold v1.1.4 implements only the
+  Model Optimizer NVFP4/MXFP8 layout, so those checkpoints are not supported here: this port has no preset,
+  no download link and no build path for them, and they are listed only so the record of upstream's work stays
+  complete. Their credits live in the upstream repository.
 
 ## Inference engine
 

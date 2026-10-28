@@ -33,7 +33,7 @@ the same tree that was measured; [`VERSIONS.md`](VERSIONS.md) explains each pin 
 |---|---|
 | TensorFold engine | tag **`v1.1.4`** = `eab8582819688325e371907e4706e1c602b8a273` (the recipe's own `TF_REF`) |
 | MiaAI-Lab recipe | commit **`fd3f43e11238553685ebb68b6d8ab2b112818e3c`**, carrying `patches/0001..0017` |
-| Model checkpoint | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ **`b9ce18a6887e18c089fdea8509a33e63429a3300`** (NVFP4, `modelopt` / `MIXED_PRECISION`, 96 GB) |
+| Model checkpoint | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ **`b9ce18a6887e18c089fdea8509a33e63429a3300`** (NVFP4, `modelopt` / `MIXED_PRECISION`, 96 GB) — the only checkpoint this port supports |
 | Toolchain | zig **0.17.0** aarch64-windows · CUDA toolkit **13.4** (`V13.4.92`) · MSVC **v143 14.44.35207** arm64 |
 | Patch series | `0001` + `0002` + `0003`, hashes in [`VERSIONS.md` §2](VERSIONS.md) |
 
@@ -48,7 +48,7 @@ the same tree that was measured; [`VERSIONS.md`](VERSIONS.md) explains each pin 
 | `scripts/engine/1-preflight.ps1` … `6-smoke.ps1` | The **engine** half (TensorFold): preflight, clone, 3 patches, vision venv, build, smoke |
 | `scripts/recipe/1-install-ps1.ps1` | The **recipe** half, and the only script that writes into the MiaAI-Lab clone: copies four `.ps1` in, sets `MODEL_PATH` in `.env`, changes nothing else |
 | `scripts/Invoke-Migration.ps1` | One-shot runner: asks for paths, then runs the engine half, the recipe half, or both |
-| `recipe/start.ps1`, `stop.ps1`, `config.ps1`, `banner.ps1` | The recipe's shell scripts as PowerShell, including two PowerShell 5.1 bug fixes (`$null` becomes `''` in a `[string]` default; 5.1's `Invoke-RestMethod` defaults to POST) |
+| `recipe/start.ps1`, `stop.ps1`, `config.ps1`, `banner.ps1` | The recipe's shell scripts as PowerShell, including two PowerShell 5.1 bug fixes (`$null` becomes `''` in a `[string]` default; 5.1's `Invoke-RestMethod` defaults to POST). `config.ps1` carries one checkpoint preset — the FP4 export — and refuses any other `CHECKPOINT` |
 | `SKILL.md`, `references/` | The same procedure in agent-facing form (WorkBuddy/Claude skill layout), plus build notes and the verification record |
 | `docs/patching-and-port.md` | Long form: how each patch was cut, what broke, and the `.sh` → `.ps1` decisions one by one |
 | `NOTICE`, `LICENSES/`, `CREDITS.md` | License chain. Read `NOTICE` before redistributing anything |
@@ -171,8 +171,10 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 
 A mirror is a different host, not a different model — so check the download is the export this engine takes:
 `config.json` must carry `quant_method: modelopt` and `quant_algo: MIXED_PRECISION`. A GPTQ re-upload loads with
-`UnsupportedCheckpoint`. The terms travel with the weights from either host: NVIDIA's Open Model Agreement for the
-FP4 export, the Qwen Community License 1.0 for the base model.
+`UnsupportedCheckpoint`. **No other checkpoint is supported.** The AutoRound INT4 conversions of this model are
+GPTQ — a quantization path TensorFold removed — so `CHECKPOINT=int4` is not a preset here, and pointing
+`MODEL_PATH` at one fails the same way. The terms travel with the weights from either host: NVIDIA's Open Model
+Agreement for the FP4 export, the Qwen Community License 1.0 for the base model.
 
 ## Model load: 257 s → 71 s
 
@@ -230,12 +232,13 @@ by **NVIDIA** — Qwen3.8 Flash Next quantized with quantization-aware distillat
 using NVIDIA Model Optimizer: NVFP4 routed experts with CSF-compressed scales, MXFP8 attention / DeltaNet /
 shared experts, an NVFP4 n-gram table, quantized MTP and vision towers. Under the
 [NVIDIA Open Model Agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-agreement/);
-the Qwen license applies as well. The optional `CHECKPOINT=int4` preset is
-[`azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound`](https://huggingface.co/azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound)
-by **azampatti** (expert cut, shared-expert healing, packaging), built on **Intel**'s
-[AutoRound W4A16](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound) and on the hybrid checkpoint
-of **Saren-Arterius**; the earlier MLX-4bit path was
-[`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP).
+the Qwen license applies as well.
+
+**That checkpoint, and only that checkpoint.** TensorFold v1.1.4 loads a checkpoint only when `config.json`
+says `quant_method: modelopt` and `quant_algo: MIXED_PRECISION`. NVIDIA's export is exactly that; the
+AutoRound INT4 conversions of the same model are GPTQ, a quantization path the engine dropped, so they load
+with `UnsupportedCheckpoint` no matter what the flags say. This port therefore ships a single preset and
+refuses any other `CHECKPOINT` before it reads a weight.
 
 **Engine.** [TensorFold](https://github.com/ashhart/TensorFold) by **Ash Hart** ([ashhart](https://github.com/ashhart))
 and the TensorFold contributors — the Zig engine `tensorfold-native`, its CUDA runtime and kernels, MTP drafting

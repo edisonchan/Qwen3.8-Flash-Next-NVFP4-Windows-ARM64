@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
-Serve Qwen3.8 Flash Next (CHECKPOINT=nvfp4 for NVIDIA's QAD FP4 checkpoint, int4 for
-azampatti's INT4-AutoRound) with TensorFold's Zig engine on one RTX Spark: launches
+Serve Qwen3.8 Flash Next from NVIDIA's QAD FP4 checkpoint (nvidia/Qwen3.8-Flash-Next-FP4-Local,
+the only checkpoint TensorFold v1.1.4 can load) with TensorFold's Zig engine on one RTX Spark: launches
 tensorfold-native serve on port 8888, waits until the OpenAI API answers, then runs a
 smoke test. Stop it with .\stop.ps1. Windows port of start.sh: no Docker - the native
 engine runs directly on this host.
@@ -59,6 +59,12 @@ foreach ($t in @(@('THINKING', $Thinking), @('DRAFTS', $Drafts), @('VISION', $Vi
 if ($Yarn -notin @(0, 4)) { Die "TF_FLASHNEXT_YARN is 0 or 4, not $Yarn" }
 if ($Context -gt 262144 -and $Yarn -eq 0) { Die "CONTEXT=$Context is past 262,144: it needs YaRN (TF_FLASHNEXT_YARN=4)" }
 if ($KvDtype -notin @('bf16', 'fp8')) { Die "KV_DTYPE is bf16 or fp8, not $KvDtype" }
+if ($CHECKPOINT -ne 'nvfp4') {
+    Die ("CHECKPOINT=$CHECKPOINT is not supported: this port serves nvidia/Qwen3.8-Flash-Next-FP4-Local only. " +
+         'TensorFold v1.1.4 loads a checkpoint only when config.json says quant_method=modelopt and ' +
+         'quant_algo=MIXED_PRECISION; the AutoRound INT4 conversions are GPTQ, a quantization path the engine ' +
+         'no longer implements, so no setting makes one load.')
+}
 
 $serveArgs = @('--context', "$Context", '--parallel', "$Parallel", '--max-tokens', "$MaxTokens",
                '--temperature', "$Temperature", '--top-p', "$TopP", '--top-k', "$TopK")
@@ -112,7 +118,7 @@ if (-not $DryRun -and $mode -eq 'start' -and $runningPid) {
 # ---- step 1: setup (no Docker: binary, checkpoint, vision python) ----
 Step 1 'Setup: engine binary, checkpoint and vision helper'
 if (-not (Test-Path $NativeBin)) { Die "tensorfold-native.exe not found at $NativeBin (build TensorFold first, or set NATIVE_BIN)" }
-if (-not (Test-Path (Join-Path $ModelPath 'config.json'))) { Die "$ModelPath has no config.json: set MODEL_PATH to the local checkpoint directory (CHECKPOINT=nvfp4|int4 picks a preset)" }
+if (-not (Test-Path (Join-Path $ModelPath 'config.json'))) { Die "$ModelPath has no config.json: set MODEL_PATH to the local FP4 checkpoint directory (config.ps1 explains why no other export is supported)" }
 if ($Vision -eq '1') {
     if (-not (Test-Path $VisionPython)) { Die "vision is on but the venv python is missing: $VisionPython (set VENV_DIR or VISION=0)" }
     & $VisionPython -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('tensorfold.vision.native_helper') else 1)" 2>$null
@@ -133,8 +139,7 @@ if ($kernEnv -and $kernEnv -ne 'native' -and -not (Test-Path (Join-Path $kernEnv
 if (-not $kernEnv) {
     $kernelCandidates = @(
         (Join-Path (Split-Path -Parent $NativeBin) '..\share\tensorfold\cuda\sm121'),
-        (Join-Path $PSScriptRoot 'build\kernels\sm121'),
-        (Join-Path $PSScriptRoot 'build\kernels\sm121-int4ar')
+        (Join-Path $PSScriptRoot 'build\kernels\sm121')
     )
     $found = $null
     # A set left by an earlier engine build silently wins over the exe's own kernels and then fails at load

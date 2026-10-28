@@ -388,12 +388,18 @@ powershell -ExecutionPolicy Bypass -File scripts\engine\6-smoke.ps1
 
 ## 7. 模型位置
 
-### 7.1 两个预设（`scripts\config.ps1`）
+### 7.1 只有一个受支持的权重（`scripts\config.ps1`）
 
-| `CHECKPOINT` | 默认 `MODEL_PATH` | 权重 GiB | v1.1.4 CUDA 引擎可用？ |
-|---|---|---|---|
-| `nvfp4`（默认） | `D:\llm\model\Qwen3.8-Flash-Next-FP4-Local` | 81 | ✅ **唯一可用** |
-| `int4` | `D:\llm\model\Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound` | 66 | ❌ GPTQ 布局，加载即 `UnsupportedCheckpoint` |
+本 repo **只适用于** `nvidia/Qwen3.8-Flash-Next-FP4-Local`（`modelopt` / `MIXED_PRECISION`，96 GB）。
+`CHECKPOINT` 写成别的值不会退化、也没有第二条预设：`start.ps1` 在读完 validate 段（第 62 行）就直接
+`Die`，早于加载、早于碰任何权重——这样你不会等 48 层读完才看到 `UnsupportedCheckpoint`。
+
+| `CHECKPOINT` | 默认 `MODEL_PATH` | 权重 GiB |
+|---|---|---|
+| `nvfp4`（唯一受支持，也是默认） | `D:\llm\model\Qwen3.8-Flash-Next-FP4-Local` | 81 |
+
+`config.ps1` 对其它取值只把 `$ModelPath` 置空并把 `$QuantLabel` 标成 `unsupported`，**不**在里面 `exit`：
+`stop.ps1` 也 dot-source 这个文件，而它根本不关心 checkpoint。拒绝的动作放在 `start.ps1`，因为只有启动需要权重。
 
 覆盖：`$env:MODEL_PATH='E:\models\xxx'; .\start.ps1`，或写进配方根目录 `.env`：
 
@@ -412,7 +418,8 @@ MODEL_PATH=D:\llm\model\Qwen3.8-Flash-Next-FP4-Local
 - `quantized_layers`：逐层 NVFP4（routed experts，block 16）+ MXFP8（shared_expert / attention 投影，block 32）
 - `tie_word_embeddings = false`
 
-INT4-AutoRound 的 `quant_method = "gptq"` 直接落在第一条之外——**这不是配置问题，是格式不支持**。
+AutoRound 的 INT4 版本 `quant_method = "gptq"`，落在第一条之外——**这不是配置问题，是引擎已移除那条量化路径**，
+本 repo 因此不提供它的预设、也不要在文档里给出它的下载链接。
 
 ### 7.3 目录布局（注意 `tensors\` 子目录）
 
@@ -655,6 +662,28 @@ info: flashnext: layer 47 took 1170 ms
     直接 `Out-String` 会把 `NVIDIA NPU, [N/A]` 拼进报告的 GPU 行；要过滤掉 `[N/A]` 或只取第一行。
 25. **`Write-Host ''` 的空行在某些宿主/管道捕获里会丢**，相邻两行被拼在一起（`...GiBPREFLIGHT OK:`）。
     要断言输出就 `-split "`r?`n"` 看行，别对着拼在一起的字符串写正则。
+26. **配方 `scripts/config.sh` 导出的 `TF_FLASHNEXT_*` 必须逐个搬进 `config.ps1`**——这是最容易漏、
+    也最贵的一处。这些变量是配方的**性能开关**，而引擎把"未设置"一律当成 **off** 或**出厂规则**：
+    `GATHER_EARLY` / `SAMPLE_CAND` / `SHARED_SIDE` / `GDN_LANES` / `KEEP_LATE` / `PROMPT_HC2` /
+    `PROMPT_GEMM2` 未设 = 关；`HEAD_PIECE` 未设 = 256（配方是 1536）；`CONFIDENCE` 未设 = 0.6
+    （配方是 `-0.4`）。症状是"**补丁全对、二进制也对，跑的不是同一台引擎**"。所以移植完引擎脚本后
+    要拿两边对一遍：
+    `grep -oE "^export (TF_FLASHNEXT|TENSORFOLD)_[A-Z0-9_]+" scripts/config.sh | sort` 与
+    `grep -oE "Set-EnvVar '[A-Z0-9_]+'" scripts/config.ps1 | sort` 的差集必须只剩**有意为之**的项。
+    本 skill 的 `config.ps1` 现在导出 21 个 `TF_FLASHNEXT_*`，与 `config.sh` 一一对应。
+    **但别把配方 README 的百分比当成 Windows 上的预期**：那 +14% / 15–25% 是它 Linux 镜像上的数字。
+    本机 2026-10-28 的实测结论相反——补齐整套之后单流 greedy code 从 86.4 掉到 76.9 tok/s、
+    `c4` 159.1 → 149.0、itlP95 40 → 46 ms，而 MTP 接受率几乎不变（71.7% → 72.4%）。
+    也就是说这 21 项里至少有一项在 WDDM 上是负收益（嫌疑：`SHARED_SIDE` 的第二条 CUDA stream、
+    `GATHER_READ=pread`、`PROMPT_GEMM2`），该做的是逐项二分（每项一次重启），而不是先假定"补上就更快"。
+    顺带一提：`TF_FLASHNEXT_DEPTH` **不是**引擎变量（引擎只有 `TF_FLASHNEXT_DEPTH_LOG`），
+    真正控制 draft 长度的是 `TF_FLASHNEXT_DRAFTS`——写了错的变量名不会有任何报错，只会静默不生效。
+
+27. **dot-source 的文件里 `exit` 不会终止调用方**：它只结束被引入的那个文件，然后回到调用者的下一行。
+    `config.ps1` 原来写 `default { …; exit 1 }`，于是 `CHECKPOINT` 写错时 `start.ps1` 照样往下跑，
+    只是 `$ModelPath` 是空的。拒绝要放在**调用方**（`start.ps1` validate 段用 `Die`，它才真的 `exit`
+    整个脚本）；或者配置里只留标记、让唯一需要权重的脚本报错——`stop.ps1` 也 dot-source 同一个文件，
+    它不该因为 checkpoint 不合法就拒绝停服务。
 
 ---
 
@@ -678,7 +707,8 @@ info: flashnext: layer 47 took 1170 ms
 | `argument --kv-dtype: invalid choice: 'fp8'` | v1.1.4 把旗标改成 `--kv-cache` | `start.ps1` 用 `--kv-cache`（本 skill 的配方版本已含此修正） |
 | `... with ...\build\kernels\sm121 glue kernels (Fp8KvUnsupported)` | 用了**旧引擎**留下的 AOT 核集 | 把该目录改名；`start.ps1` 会忽略 mtime 早于 exe 的核集 |
 | `TENSORFOLD_CUDA_KERNELS= holds no aot.json` | 变量存在但为空 | 给 `native`（本 skill 的 `start.ps1` 已自动纠正） |
-| `config.json's quantization_config.quant_method differs ...` / `UnsupportedCheckpoint` | 用了 GPTQ INT4 checkpoint | 改用 `nvfp4`（第 7 章） |
+| `config.json's quantization_config.quant_method differs ...` / `UnsupportedCheckpoint` | 用了 GPTQ（AutoRound INT4）checkpoint | 本 repo 不支持：只能用 `nvidia/Qwen3.8-Flash-Next-FP4-Local`（第 7 章） |
+| `[start.ps1] ERROR: CHECKPOINT=<x> is not supported` | `CHECKPOINT` 不是 `nvfp4`（换成了别的量化版本） | 这是设计如此：本 repo 只有一个受支持的权重（第 7 章） |
 | 构建成功但 `start.ps1` 说 `tensorfold-native.exe not found` | 目录布局不对/名字不是 `TensorFold` | 按第 0 章摆好，或设 `NATIVE_BIN` |
 | `vision is on but the venv python is missing` | 没建 venv | 第 3 章，或 `VISION=0` |
 | 日志全是乱码 | GBK/UTF-16 编码 | `Get-Content -Encoding Default`、`iconv -f gbk` |
@@ -688,6 +718,7 @@ info: flashnext: layer 47 took 1170 ms
 | 设了 `TENSORFOLD_LOAD_STATS=1` 却没有分段计时 | 变量名没进引擎（必须 `TENSORFOLD_` 前缀且在 `.env` 里），或看错了日志 | 分段行在 `serve-*.err.log`，`info:` 开头 |
 | `only 2 GiB host memory left while loading (MEM_FLOOR_GIB 4)` | staging 缓冲的正常占用，统一内存机型常见 | 只告警不阻断；要压下去就调小 `TENSORFOLD_LOAD_GROUP` |
 | `--parallel 5 needs 23.74 GiB … leaves 22.81 GiB` | 5 流的 fp8 KV 超出内存准入（加载完成后才报） | `.env` 里固定 `PARALLEL=4`，或降 `CONTEXT` |
+| 补丁全打上、二进制也是这棵树编的，但 decode/prefill 比页面慢 20–30% | `config.sh` 里的 `TF_FLASHNEXT_*` 性能开关没搬全，引擎按 off 跑 | 按第 9 章 #26 做差集；`config.ps1` 应导出 21 个 `TF_FLASHNEXT_*` |
 
 ---
 

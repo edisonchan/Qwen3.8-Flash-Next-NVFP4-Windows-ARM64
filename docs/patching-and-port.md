@@ -18,7 +18,7 @@
 |---|---|
 | 引擎 | `ashhart/TensorFold` @ `eab8582819688325e371907e4706e1c602b8a273`（tag v1.1.4） |
 | 配方 | `MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold` @ `fd3f43e11238553685ebb68b6d8ab2b112818e3c`（其 `patches/0001..0017`） |
-| 权重 | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ `b9ce18a6887e18c089fdea8509a33e63429a3300`（`modelopt`/`MIXED_PRECISION`，96 GB） |
+| 权重 | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ `b9ce18a6887e18c089fdea8509a33e63429a3300`（`modelopt`/`MIXED_PRECISION`，96 GB，**唯一受支持**） |
 | 工具链 | zig 0.17.0（aarch64-windows）· CUDA 13.4（`V13.4.92`）· MSVC 14.44.35207 arm64 · Windows 11 ARM64 build 10.0.28000 |
 | 补丁 | `0001`（配方 0001–0017 合并）→ `0002`（Windows/MSVC 5 处）→ `0003`（加载流水线），**顺序不能换** |
 | 工作树 | 78 项变更 = 59 修改 + 19 新增 |
@@ -531,9 +531,44 @@ Linux 那套"环境优先、`.env` 只补空缺"的语义会让旧默认值反�
 都会被导出，所以引擎侧的开关（`TENSORFOLD_LOAD_STATS`、`TENSORFOLD_MEMORY_RESERVE_GIB` 等）
 只要写进 `.env` 就能进到子进程——这也是 §3.3 那个坑的由来。
 
-另一个差异：`config.sh` 导出了 19 个 `TF_FLASHNEXT_*` 性能开关，`config.ps1` 只显式导出 5 个
-（`YARN` / `DEPTH` / `PRODUCT_STREAMS` / `PREFILL_TAIL` / `PROMPT_EXPERT_TILE`），其余走引擎默认值。
-两边的默认值本来就是同一套，所以行为一致；但如果哪天要压测某个开关，记得**两边都要改**。
+另一个差异，**曾经是错的，2026-10-28 修**：`config.sh` 导出 25 个引擎变量，而 `config.ps1` 当时只显式导出
+11 个，漏了 17 个 `TF_FLASHNEXT_*`。当初的判断是"其余走引擎默认值，两边默认值本来就是同一套"——
+**这句是错的**。引擎对未设置的变量一律当 **off**（或出厂规则），而配方导出的全是 `1`：
+
+| 变量 | 引擎未设置时 | 配方 |
+|---|---|---|
+| `GATHER_EARLY` / `SAMPLE_CAND` / `SHARED_SIDE` / `GDN_LANES` / `KEEP_LATE` | `false` / `.off` | `1` |
+| `PROMPT_HC2` / `PROMPT_SHARED_DIRECT` / `PROMPT_GEMM2` / `DRAFT_AHEAD` / `WARM_AHEAD` | `false` | `1` |
+| `HEAD_PIECE` | `256` | `1536` |
+| `PREFILL_TAIL` | `0` | `512` |
+| `CONFIDENCE` | `0.6`（每 draft 地板） | `-0.4`（连乘 ≥ 0.4） |
+| `SAMPLED_HEADS` | `false` | `1` |
+| `HOST_DRAW_THREADS` | `0`（自动） | `7` |
+| `GATHER_READ` | 映射页错误 | `pread` |
+
+后果不是"行为略有差别"，而是**跑的根本不是同一台引擎**：未设置的开关让引擎走 fallback 路径
+（`GATHER_READ` 未设时退回映射页、`CONFIDENCE` 用 0.6 的每 draft 地板、`PROMPT_*` 整族关掉），
+所以补齐属于**正确性**，不是调优。现在的 `config.ps1` 导出 21 个 `TF_FLASHNEXT_*`，与 `config.sh`
+一一对应，每项都仍可被 `.env` 覆盖。
+
+但有一条必须如实记下：**补齐后本机单流 decode 没有变快，反而慢了**——greedy code `c1` 从 86.4 掉到
+76.9 tok/s，`c2` 123.5 → 112.1，`c4` 159.1 → 149.0，itlP95 40 → 46 ms，而 MTP 接受率基本没动
+（71.7% → 72.4%），各 3 轮取中位。说明这 21 项里至少有一项在 Windows/WDDM 上是负收益（嫌疑：
+`SHARED_SIDE` 开第二条 CUDA stream、`GATHER_READ=pread`、`PROMPT_GEMM2`），因此"比页面慢 20–30%
+全怪漏了这些开关"这个归因**目前并不成立**，要逐项二分（每项一次重启）才能定论。
+配方 README 里那些 +14% / 15–25% 是它自己 Linux 镜像上的数字，不能当作 Windows 上的预期。
+
+**验收办法**（新机器上必做一次）：
+
+```powershell
+# 两边取出来做差集，剩下的应该只有"有意为之"的项
+grep -oE "^export (TF_FLASHNEXT|TENSORFOLD)_[A-Z0-9_]+" scripts/config.sh | sed 's/^export //' | sort > sh.txt
+grep -oE "Set-EnvVar '[A-Z0-9_]+'" scripts/config.ps1 | sed "s/Set-EnvVar '//;s/'//" | sort > ps.txt
+diff sh.txt ps.txt
+```
+
+顺带记一个反例：`TF_FLASHNEXT_DEPTH` 在引擎里**不存在**（只有 `TF_FLASHNEXT_DEPTH_LOG`），写错的变量名
+不会报任何错，只是静默不生效——控制 draft 长度的是 `TF_FLASHNEXT_DRAFTS`。
 
 ### 6.6 PowerShell 5.1 的语法地雷（写脚本时必踩）
 

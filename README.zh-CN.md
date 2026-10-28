@@ -22,7 +22,7 @@ ARM64——**NVIDIA RTX Spark**（GB10，128 GB 统一内存，`sm_121`）——
 |---|---|
 | TensorFold 引擎 | tag **`v1.1.4`** = `eab8582819688325e371907e4706e1c602b8a273`（与配方自己的 `TF_REF` 同一个提交） |
 | MiaAI-Lab 配方 | commit **`fd3f43e11238553685ebb68b6d8ab2b112818e3c`**，其 `patches/0001..0017` 即补丁 0001 的来源 |
-| 模型权重 | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ **`b9ce18a6887e18c089fdea8509a33e63429a3300`**（NVFP4，`modelopt` / `MIXED_PRECISION`，96 GB） |
+| 模型权重 | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ **`b9ce18a6887e18c089fdea8509a33e63429a3300`**（NVFP4，`modelopt` / `MIXED_PRECISION`，96 GB）——**唯一受支持**的权重 |
 | 工具链 | zig **0.17.0** aarch64-windows · CUDA toolkit **13.4**（`V13.4.92`）· MSVC **v143 14.44.35207** arm64 |
 | 补丁序列 | `0001` + `0002` + `0003`，三份哈希见 [`VERSIONS.md` §2](VERSIONS.md) |
 
@@ -37,7 +37,7 @@ ARM64——**NVIDIA RTX Spark**（GB10，128 GB 统一内存，`sm_121`）——
 | `scripts/engine/1-preflight.ps1` … `6-smoke.ps1` | **引擎侧**（TensorFold）：预检、克隆、3 份补丁、vision venv、构建、冒烟 |
 | `scripts/recipe/1-install-ps1.ps1` | **配方侧**，也是唯一往 MiaAI-Lab 克隆里写东西的脚本：放 4 个 `.ps1`、把 `MODEL_PATH` 写进 `.env`，别的都不动 |
 | `scripts/Invoke-Migration.ps1` | 一键总控：先问路径，再选跑引擎侧、配方侧还是两边 |
-| `recipe/start.ps1`、`stop.ps1`、`config.ps1`、`banner.ps1` | 配方 shell 脚本的 PowerShell 版，含两个 PowerShell 5.1 的真 bug 修复（`[string]` 默认值把 `$null` 变成空串；5.1 的 `Invoke-RestMethod` 默认动词是 POST） |
+| `recipe/start.ps1`、`stop.ps1`、`config.ps1`、`banner.ps1` | 配方 shell 脚本的 PowerShell 版，含两个 PowerShell 5.1 的真 bug 修复（`[string]` 默认值把 `$null` 变成空串；5.1 的 `Invoke-RestMethod` 默认动词是 POST）。`config.ps1` 只有一个权重预设——FP4 那份——别的 `CHECKPOINT` 一律拒绝 |
 | `SKILL.md`、`references/` | 同一套流程的 agent 可执行形态（WorkBuddy / Claude skill 布局），外加构建笔记与验证记录 |
 | `docs/patching-and-port.md` | 长文：每份补丁怎么切出来的、踩了什么、`.sh → .ps1` 的取舍逐条 |
 | `NOTICE`、`LICENSES/`、`CREDITS.md` | 许可链。二次分发前先读 `NOTICE` |
@@ -158,7 +158,9 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 
 镜像只是换了托管方，不是换了模型——所以下完先确认是这台引擎能吃的那份导出：`config.json` 里必须是
 `quant_method: modelopt`、`quant_algo: MIXED_PRECISION`。GPTQ 的二次上传会在加载时报
-`UnsupportedCheckpoint`。无论从哪个源下载，许可条款都跟着权重走：FP4 导出适用 NVIDIA Open Model Agreement，
+`UnsupportedCheckpoint`。**除这份导出之外没有别的受支持权重**：AutoRound 的 INT4 版本是 GPTQ，而 TensorFold
+已经去掉了那条量化路径，所以本仓库没有 `CHECKPOINT=int4` 这个预设，把 `MODEL_PATH` 指过去也是同样的报错。
+无论从哪个源下载，许可条款都跟着权重走：FP4 导出适用 NVIDIA Open Model Agreement，
 底座模型适用 Qwen Community License 1.0。
 
 ## 加载：257 秒 → 71 秒
@@ -212,12 +214,12 @@ CUDA 13.4 · Zig 0.17.0（aarch64-windows）· MSVC 2022 Build Tools（含 ARM64
 由 **NVIDIA** 出品：以 bf16 模型为教师做量化感知蒸馏（QAD）、用 NVIDIA Model Optimizer 导出——NVFP4 路由专家
 配 CSF 压缩缩放因子、MXFP8 的注意力 / DeltaNet / 共享专家、NVFP4 n-gram 表、量化后的 MTP 与视觉塔。适用
 [NVIDIA Open Model Agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-agreement/)，
-同时继承 Qwen 许可。可选的 `CHECKPOINT=int4` 预设是 **azampatti** 的
-[`azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound`](https://huggingface.co/azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound)
-（top-5 专家裁剪、共享专家修复、打包），基于 **Intel** 的
-[AutoRound W4A16](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound) 与 **Saren-Arterius** 的混合
-checkpoint；更早的 MLX 4-bit 路线来自
-[`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP)。
+同时继承 Qwen 许可。
+
+**只有这份权重可以用。** TensorFold v1.1.4 只在 `config.json` 写着 `quant_method: modelopt` 且
+`quant_algo: MIXED_PRECISION` 时才加载——NVIDIA 这份导出正好如此；同一个模型的 AutoRound INT4 版本是 GPTQ，
+而引擎已经去掉了那条量化路径，无论旗标怎么给都会以 `UnsupportedCheckpoint` 结束。所以本移植只保留一个预设，
+并且会在读第一个权重之前就拒绝其它 `CHECKPOINT`。
 
 **引擎。** [TensorFold](https://github.com/ashhart/TensorFold)，作者 **Ash Hart**
 （[ashhart](https://github.com/ashhart)）与 TensorFold 贡献者：Zig 引擎 `tensorfold-native`、CUDA 运行时与
