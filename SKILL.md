@@ -28,17 +28,18 @@ agent_created: true
 | MSVC | VS 2022 Build Tools `14.44.35207` + `MSVC v143 C++ ARM64 build tools`（`Hostarm64\arm64\cl.exe`） |
 | GPU 目标 | `sm_121`（`compute_121`，RTX Spark N1X，48 SMs） |
 | 权重 | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ `b9ce18a6887e18c089fdea8509a33e63429a3300`（`modelopt`/`MIXED_PRECISION`，96 GB） |
-| Python | 3.13 arm64（仅 `--vision` 需要） |
+| Python | 3.13 arm64（仅 `--vision` 需要；venv 建在配方目录里，见第 3 章） |
 | 模型加载 | **71 s / 48 层**（打全三份补丁；原生路径 257 s，见第 8 章） |
-| 落地根 | 默认 `D:\llm\latest` |
+| 落地根 | **不写死**：`scripts\migration.config.ps1` 探测 + 交互选单，结果存 `.migration.local.json` |
+| 路径来源 | 每个脚本都从配置模块取值；显式参数 > 保存的配置 > 探测值 |
 
 **目录布局是硬约束**：配方 `scripts\config.ps1` 把引擎路径算成
 `<配方的父目录>\TensorFold\build\native\bin\tensorfold-native.exe`。所以两个克隆必须**同级**，
-引擎目录必须**正好叫 `TensorFold`**：
+引擎目录必须**正好叫 `TensorFold`**（只有 root 可选，这两个目录名由配方决定）：
 
 ```
-<Root>\
-├─ Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold\   ← 配方
+<Root>\                                             ← 选单第 1 项，默认取本仓库所在目录
+├─ Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold\   ← 配方（我们只往里加 .ps1）
 │  ├─ patches\  scripts\  start.ps1  stop.ps1  venv\
 └─ TensorFold\                                       ← 引擎（名字不能改）
    └─ build\native\bin\tensorfold-native.exe
@@ -46,13 +47,41 @@ agent_created: true
 
 否则启动时报 `tensorfold-native.exe not found at ...`（可用 `NATIVE_BIN` 覆盖，但不推荐）。
 
-**三条命令完成迁移**（详见各章）：
+**一条命令完成迁移**（路径在选单里回答，之后不再问）：
 
 ```powershell
 cd <本 skill 目录>
-powershell -ExecutionPolicy Bypass -File scripts\Invoke-Migration.ps1 -Root "D:\llm\latest"
-# 或分步：1-preflight → 2-clone → 3-apply-patches → 4-venv → 5-build → 6-smoke
+powershell -ExecutionPolicy Bypass -File scripts\Invoke-Migration.ps1
+# 选单：先确认 root/python/zig/cuda/vcvars/model，再选 engine / recipe / both
+# 非交互：-Only engine -NonInteractive   重问路径：-Reset
 ```
+
+### 0.1 路径不是写死的
+
+所有脚本都 dot-source `scripts\migration.config.ps1`，没有任何一处 `D:\llm\latest` 落在代码里：
+
+| 项 | 探测来源 | 可改 |
+|---|---|---|
+| root | 本仓库所在目录（同级就是两个克隆的位置） | 选单第 1 项，`-Root` |
+| python | `PATH` → `%LOCALAPPDATA%\Programs\Python` → `%ProgramFiles%` → `C:\` | 第 2 项，`-Python` |
+| zig | `PATH` → `<root 的上级>`/`<root>` 下 `zig*` 目录 | 第 3 项，`-Zig` |
+| CUDA | `CUDA_PATH` → toolkit 安装根下所有版本（取了要有 `bin\nvcc.exe`） | 第 4 项，`-Cuda` |
+| vcvars | 任意 VS 2022（BuildTools/Community/Pro/Enterprise）的 `vcvarsall.bat` | 第 5 项，`-Vcvars` |
+| model | `MODEL_PATH` → `<root 的上级>\model\<name>` → `<root>\model\<name>` | 第 6 项，`-ModelPath` |
+
+选单接受时先校验（zig 必须 0.17.0、nvcc 必须 13.4、python 必须 3.11+ 且 aarch64、权重必须
+`modelopt`/`MIXED_PRECISION`）；有硬伤会要求二次确认，免得三步之后才炸。确认后写入
+`.migration.local.json`（已 git 忽略），删掉它就等于"重新问一遍"。
+
+### 0.2 两条线：engine 与 recipe
+
+| | 动什么 | 脚本 | 产物 |
+|---|---|---|---|
+| **engine** | TensorFold：三份补丁 + 构建 | `scripts\engine\1-preflight … 6-smoke` | `TensorFold\build\native\bin\tensorfold-native.exe` |
+| **recipe** | MiaAI-Lab 克隆：**只加文件** | `scripts\recipe\1-install-ps1.ps1` | `start.ps1`、`stop.ps1`、`scripts\config.ps1`、`scripts\banner.ps1`（+ `.env` 的 `MODEL_PATH`） |
+
+配方的源码、`patches/0001..0017`、Dockerfile 一律不动。`1-install-ps1.ps1` 末尾会自己验：
+`git -C <配方> status --porcelain` 只应有 `??`（新增），不应有 ` M`（修改）。
 
 ---
 
@@ -62,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File scripts\Invoke-Migration.ps1 -Root "D:\
 
 | 项 | 要求 | 本机实测 |
 |---|---|---|
-| CPU/OS | Windows 11 ARM64（`OSArchitecture = Arm64`） | ✅ |
+| CPU/OS | Windows 11 ARM64（`Win32_Processor.Architecture = 12`，见第 9 章 #8） | ✅ |
 | GPU | NVIDIA，计算能力 12.1（GB10 / RTX Spark N1X） | RTX Spark N1X，48 SMs |
 | 显存/统一内存 | 权重 81 GiB（NVFP4）+ 每流 KV ~4.7 GiB | GPU pool 98 GiB，系统可见 ~30 GiB |
 | 磁盘 | 源码+缓存 ≥ 25 GiB；**模型另需 96 GiB** | D: 1.5 TB |
@@ -87,9 +116,9 @@ zig 下载：`https://ziglang.org/download/0.17.0/zig-aarch64-windows-0.17.0.zip
 ### 1.3 一键预检
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\1-preflight.ps1
+powershell -ExecutionPolicy Bypass -File scripts\engine\1-preflight.ps1
 # 自定义路径：
-powershell -ExecutionPolicy Bypass -File scripts\1-preflight.ps1 `
+powershell -ExecutionPolicy Bypass -File scripts\engine\1-preflight.ps1 `
   -Zig "E:\tools\zig.exe" -Cuda "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4" `
   -Vcvars "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" `
   -Root "E:\ai"
@@ -104,9 +133,9 @@ powershell -ExecutionPolicy Bypass -File scripts\1-preflight.ps1 `
 ### 2.1 命令
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\2-clone.ps1 -Root "D:\llm\latest"
+powershell -ExecutionPolicy Bypass -File scripts\engine\2-clone.ps1 -Root "D:\llm\latest"
 # 钉住配方 commit（可选，推荐用于完全复现）：
-powershell -ExecutionPolicy Bypass -File scripts\2-clone.ps1 -Root "D:\llm\latest" -RecipeRef fd3f43e
+powershell -ExecutionPolicy Bypass -File scripts\engine\2-clone.ps1 -Root "D:\llm\latest" -RecipeRef fd3f43e
 ```
 
 等价的手工命令：
@@ -146,20 +175,33 @@ git -C D:\llm\latest\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold rev-parse --
 原生引擎跑文本**不需要 Python**。只有开启 `--vision`（图片/视频输入）时，引擎才会启动
 `tensorfold.vision.native_helper`，此时必须有 venv。
 
-关键点：v1.1.4 的仓库自带 `setup.py` 会**主动拒绝安装**（“installs as a native binary … the Python
-engine stays at 0.6.6”）。所以 venv 装的是 **v0.6.6 标签**，不是本地 checkout。
+关键点有三条：
+
+1. **venv 建在配方目录里**（`<配方>\venv`）。不是随便找地方——`scripts\config.ps1` 把
+   `TENSORFOLD_VISION_PYTHON` 算成 `<配方>\venv\Scripts\python.exe`，`start.ps1` 开 vision 前会检查它存在。
+2. **torch 必须先装，且来自 NVIDIA 的 out-of-tree 索引**。配方在自家平台上是靠
+   `nvcr.io/nvidia/pytorch:26.07-py3` 基础镜像拿到 torch 的，Windows 上没有这个镜像，所以这一层要在 venv 里补。
+   `--only-binary=:all:` 是必须的：没有可用的源码构建路径。
+3. **tensorfold 装 v0.6.6 标签**。v1.1.4 的 `setup.py` 会**主动拒绝安装**（“installs as a native binary …
+   the Python engine stays at 0.6.6”）。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\4-venv.ps1 `
-  -Recipe "D:\llm\latest\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold"
+powershell -ExecutionPolicy Bypass -File scripts\engine\4-venv.ps1
+# 参数：-Recipe <配方> -VenvDir <venv> -Python <python.exe> -SkipTorch -Recreate
 ```
 
-手工等价：
+手工等价（顺序不要换：先 torch，否则 `tensorfold[vision]` 会把 PyPI 上的普通 torch 当依赖拉进来）：
 
 ```powershell
-cd D:\llm\latest\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold
+cd <配方目录>
 python -m venv venv
 venv\Scripts\python.exe -m pip install --upgrade pip
+
+# 1) torch：NVIDIA OOT nightly 索引
+venv\Scripts\python.exe -m pip install --pre --upgrade --only-binary=:all: `
+  --extra-index-url https://pypi.nvidia.com/nvtorch_oot_nightly torch torchvision torchaudio
+
+# 2) vision 包（v0.6.6，不是本地 checkout）
 venv\Scripts\python.exe -m pip install "tensorfold[vision] @ git+https://github.com/ashhart/TensorFold.git@v0.6.6"
 ```
 
@@ -168,20 +210,25 @@ venv\Scripts\python.exe -m pip install "tensorfold[vision] @ git+https://github.
 ```powershell
 venv\Scripts\python.exe -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('tensorfold.vision.native_helper') else 1)"
 echo $LASTEXITCODE   # 0 = 通过
+
+# torch 是否带 CUDA（脚本也会打印；False 时 vision 会退回 CPU 或直接失败）
+venv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
 
 ### 3.2 本机实测版本对照（供排查）
 
 | 包 | 版本 | 说明 |
 |---|---|---|
-| Python | 3.13.16 (arm64) | `C:\Users\<user>\AppData\Local\Programs\Python\Python313-arm64` |
+| Python | 3.13.16 (arm64) | `%LOCALAPPDATA%\Programs\Python\Python313-arm64`；必须是 aarch64，x64 轮子装不上 |
 | tensorfold | 0.6.5（本机）/ v0.6.6（推荐） | 两者都能提供 `native_helper` |
+| torch / torchvision | 2.14.0+cu134 / 0.29.0+cu134 | 来自 `nvtorch_oot_nightly`，`--pre` 装到的就是 nightly |
 | transformers | 5.20.2 | vision extra |
 | pillow / av | 13.0.0 / 19.0.2 | vision extra |
 | numpy / safetensors / huggingface_hub | 2.5.4 / 0.8.0 / 2.3.0 | 核心依赖 |
-| torch / torchvision | 2.14.0+cu134 / 0.29.0+cu134 | **不是必需**：`native_helper` 只 import 标准库 + PIL，本机这份是历史遗留 |
 
-> 磁盘预算：venv 约 0.4–1.5 GB（装不装 torch 差别很大）。网络需可达 github.com 与 PyPI。
+> 磁盘预算：venv 约 3–6 GB（torch 一家就 2 GB 以上；不装 torch 时不到 1 GB）。网络需可达
+> `pypi.nvidia.com`、`github.com` 与 PyPI。torch nightly 会滚动更新——某个 nightly 坏掉时，用
+> `-SkipTorch` 跳过，或在该 venv 里手工装一个已知可用的版本。
 
 ---
 
@@ -214,7 +261,7 @@ MSVC 兼容问题，与配方无关。
 ### 4.2 应用
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\3-apply-patches.ps1
+powershell -ExecutionPolicy Bypass -File scripts\engine\3-apply-patches.ps1
 ```
 
 脚本会做四件事：校验 HEAD == `TF_REF`、校验工作树干净、对每份补丁先 `git apply --check` 再 `git apply`、
@@ -271,9 +318,9 @@ git status --porcelain   # 应为空
 ## 5. 构建
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\5-build.ps1
+powershell -ExecutionPolicy Bypass -File scripts\engine\5-build.ps1
 # 自定义：
-powershell -ExecutionPolicy Bypass -File scripts\5-build.ps1 -TensorFold "E:\ai\TensorFold" -Sm 121
+powershell -ExecutionPolicy Bypass -File scripts\engine\5-build.ps1 -TensorFold "E:\ai\TensorFold" -Sm 121
 ```
 
 ### 5.1 它到底跑的是什么
@@ -316,7 +363,7 @@ cd /d "<TF>"
 ## 6. 冒烟（不加载模型）
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\6-smoke.ps1
+powershell -ExecutionPolicy Bypass -File scripts\engine\6-smoke.ps1
 ```
 
 三项与期望输出：
@@ -415,10 +462,20 @@ $c = Get-Content "D:\llm\model\Qwen3.8-Flash-Next-FP4-Local\config.json" -Raw | 
 $c.architectures; $c.quantization_config.quant_method; $c.quantization_config.quant_algo
 ```
 
-### 7.6 启动
+### 7.6 配方侧与启动
+
+配方侧只有一件事：把四个 `.ps1` 放进去（配方的 `.sh`、`patches/`、Dockerfile 一行不改）。
 
 ```powershell
-cd D:\llm\latest\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold
+powershell -ExecutionPolicy Bypass -File scripts\recipe\1-install-ps1.ps1
+# 结束时自验：git status 只应有 ?? 新增，不应有 M 修改
+# 顺带把 MODEL_PATH 写进配方的 .env（-NoEnv 可跳过，-Force 覆盖已有值）
+```
+
+然后起服（路径从配置来，`<配方>` 就是 `migration.config.ps1` 里 root 下的那一个）：
+
+```powershell
+cd <配方>
 .\start.ps1                 # 首启加载 ~81 GiB：打全补丁约 71 s，原生路径约 257 s
 .\start.ps1 restart         # 重启
 .\stop.ps1                  # 停止
@@ -550,8 +607,11 @@ info: flashnext: layer 47 took 1170 ms
    `nvcc --version` 都会这样；这是显示层误报，读输出内容而不是看红字。
 7. **脚本首行加 `#Requires -Version 5.1`**，并把 `Set-Location $PSScriptRoot` 放在开头（双击运行时
    工作目录是 `C:\Windows\System32`）。
-8. **判断架构别用 `$env:PROCESSOR_ARCHITECTURE`**（WOW64 下报 x86）。用
-   `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture`。
+8. **判断架构别用 `$env:PROCESSOR_ARCHITECTURE`**（WOW64 下报 x86）。也**别只用**
+   `RuntimeInformation::OSArchitecture`——shell 本身跑在 x64 模拟下时它报的是**进程**视图 `X64`；
+   `Win32_OperatingSystem.OSArchitecture` 又是本地化字符串（“ARM 64 位处理器”），`-match 'ARM64'` 不中。
+   唯一可靠的是数字：`(Get-CimInstance Win32_Processor).Architecture`，**12 = ARM64**、9 = x64、0 = x86
+   （`1-preflight.ps1` 就是这么判的，.NET 只作兜底）。
 9. **路径含空格**：`& "C:\Program Files\...\x.exe"` 或 `Start-Process -FilePath`；拼进 `.bat` 时加引号。
 10. **代码页**：`.bat` 头部 `chcp 65001 >nul`，`.bat` 用无 BOM UTF-8 写；nvcc/日志是 GBK，
     `Get-Content -Encoding Default` 读。C4819 警告是“文件含当前代码页无法表示的字符”，**不是错误**。
@@ -575,6 +635,22 @@ info: flashnext: layer 47 took 1170 ms
 18. **同一环境变量的不同大小写会撞车**：进程里同时存在 `HTTPS_PROXY` 与 `https_proxy` 时，
     `Get-ChildItem Env:` 抛“已添加了具有相同键的项”，连带 `Start-Process` 失败。启动前用
     `[Environment]::SetEnvironmentVariable($n, $null, 'Process')` 把两套名字都清掉。
+19. **读原生程序输出不要用 `2>&1`**：那会把 stderr 变成 ErrorRecord，格式化器再按主机宽度**折行**并追加
+    `NativeCommandError` 装饰——`tf-cuda-test info` 那行 130 字符的结果被截成两段，正则只匹配到前半截。
+    要拿原始文本就用 .NET `Process` 读两个流（本仓库 `migration.config.ps1` 的 `Invoke-MigNative`）。
+20. **`$Matches` 会被下一次 `-match` 覆盖**：`if ($arch -notmatch 'ARM64')` 之后再用 `$Matches[3]` 拿到的是
+    空串（我因此把 python 版本打成 `3.13.`）。匹配完立刻把分组存进变量。
+21. **`*>` 重定向写出的是 UTF-16**：`& powershell -File x.ps1 *> out.txt` 得到带 BOM 的 UTF-16，用 UTF-8
+    读会看到每字节夹 NUL、行尾错乱。要么 `-Encoding Unicode` 读，要么别用它当"干净日志"。
+22. **路径不要写进脚本**：一次迁移踩过的真实问题是"文档写 `D:\llm\latest`、代码也写死"，换台机器就全崩。
+    本仓库把路径集中到 `migration.config.ps1`（探测 + 选单 + `.migration.local.json`），脚本只消费变量；
+    唯一允许出现的绝对路径是**探测候选**，且永远有"用户可改"的出口。
+23. **`$MyInvocation.InvocationName -ne '.'`** 是"被直接运行而不是被 dot-source"的判据：配置文件靠它
+    在单独运行时弹选单、被引用时不弹。
+24. **`nvidia-smi --query-gpu` 在 GB10 上不止一行**：NPU 也会作为设备被列出来，`memory.total` 是 `[N/A]`。
+    直接 `Out-String` 会把 `NVIDIA NPU, [N/A]` 拼进报告的 GPU 行；要过滤掉 `[N/A]` 或只取第一行。
+25. **`Write-Host ''` 的空行在某些宿主/管道捕获里会丢**，相邻两行被拼在一起（`...GiBPREFLIGHT OK:`）。
+    要断言输出就 `-split "`r?`n"` 看行，别对着拼在一起的字符串写正则。
 
 ---
 
@@ -582,6 +658,15 @@ info: flashnext: layer 47 took 1170 ms
 
 | 症状 | 根因 | 处置 |
 |---|---|---|
+| 预检报 `zig not found at` / `no bin\nvcc.exe` / `vcvarsall.bat not found` | 探测没命中（PATH 里没有、装在非常规位置） | 跑 `scripts\migration.config.ps1` 打开选单，按编号改那一行；或直接传 `-Zig` / `-Cuda` / `-Vcvars` |
+| 选单里 `model` 一行是灰的 `not set` | 权重还没下，或不在 `<root 的上级>\model` 下 | 不影响构建；下好权重后重跑选单（改第 6 行），或 `-ModelPath` |
+| 改了路径但下一个脚本还按老路径跑 | 有 `.migration.local.json` 记着旧值 | 重跑 `scripts\migration.config.ps1`（或 `-Reset`）改它；删掉该文件等价于"重新探测" |
+| `3-apply-patches.ps1` 报 `patches: ...` 路径不对 / `does not apply` | 目录不是引擎克隆，或 HEAD 不是 `eab85828` | 脚本会先硬校验 HEAD；用 `-TensorFold <正确的引擎目录>`，补丁目录由脚本自身位置推导（`..\..\patches`） |
+| `torch install failed (pip exit …)` | 访问不到 `pypi.nvidia.com`，或某个 nightly 被撤 | 检查网络/代理；`-SkipTorch` 跳过；或在 venv 里手工 `pip install torch==<已知可用版本>` |
+| `torch.cuda.is_available() is False` | 装到的是 CPU 轮子，或驱动/torch 版本不匹配 | 重装 torch（`-Recreate` 重建 venv），确认 `--extra-index-url` 指向 `nvtorch_oot_nightly` |
+| `torch does not import in the venv` | venv 里的 torch 与 Python 版本/架构不匹配 | `-Recreate` 重建；确认 Python 是 aarch64（`Test-MigPython` 会拦 x64） |
+| `... does not look like the recipe clone (no scripts\config.ps1)` | `-Recipe` 指错了，或还没克隆配方 | 先 `2-clone.ps1`，或用选单第 1 行把 root 指对 |
+| `recipe\1-install-ps1.ps1` 报 `[WARN] ... exists and differs; kept it` | 配方里有你手改过的同名文件 | 确认差异后用 `-Force` 覆盖（仓库版本是权威） |
 | 所有 `.cu` 报 `error: process exited with code 1`，无其他信息 | 没进 `vcvarsall arm64` 环境 | 用 `5-build.ps1`（内部 `cmd /c` + vcvarsall） |
 | `no instance of function template ... matches the specified type` | 显式实例化缺 `__restrict__` | 打 `0002` 补丁（第 4.3 节 #1–3） |
 | `type 'void' does not support struct initialization syntax` | Windows 下 `std.posix.MAP` 是 `void` | 打 `0002`（#4） |
@@ -604,12 +689,15 @@ info: flashnext: layer 47 took 1170 ms
 
 ## 11. 交付验收清单
 
+- [ ] `scripts\migration.config.ps1` 的选单六行全是 `[ OK ]`（或已知的 `model not set`），`.migration.local.json` 已生成
 - [ ] `1-preflight.ps1` 全绿（0 FAIL）
 - [ ] `git -C TensorFold rev-parse HEAD` == `eab8582819688325e371907e4706e1c602b8a273`
 - [ ] `git -C TensorFold status --porcelain --untracked-files=all` 有 **78** 项（59 修改 + 19 新增），无冲突标记（`git diff | Select-String '<<<<<<<'` 为空）
 - [ ] `3-apply-patches.ps1` 输出的三份 sha256 与第 4.1 节一致
 - [ ] `5-build.ps1` 退出码 0，两个产物存在且 `file` 报 `PE32+ ARM64`
 - [ ] `6-smoke.ps1` 三项 `[ OK ]`，且 `kernels embedded true`
+- [ ] `recipe\1-install-ps1.ps1` 报 `the recipe itself is unmodified`，且配方里 `git status` 只有 `??` 没有 ` M`
+- [ ] venv 建在 `<配方>\venv`，`torch.cuda.is_available()` 为 True（仅 `--vision` 需要）
 - [ ] 模型 `config.json` 的 `quant_method=modelopt`、`quant_algo=MIXED_PRECISION`
 - [ ] `DRY_RUN=1 .\start.ps1` 打印的命令行含 `--kv-cache fp8`（不是 `--kv-dtype`）
 - [ ] `.env` 里没有指向旧核集/旧模型的残留项

@@ -29,8 +29,10 @@ env/
 __pycache__/
 *.pyc
 
-# Local configuration and run state (.env carries model paths and ports)
+# Local configuration and run state (.env carries model paths and ports;
+# .migration.local.json is what the path menu writes -- machine-specific, never commit)
 .env
+.migration.local.json
 logs/
 *.log
 

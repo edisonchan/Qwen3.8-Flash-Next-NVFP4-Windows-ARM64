@@ -1,69 +1,123 @@
 #Requires -Version 5.1
 <#
-  Runs steps 1..6 in order, stopping at the first failure.
+  One-shot runner. Two separately runnable halves, because they touch two different repositories:
 
+    engine  (TensorFold)      clone at the pinned release -> 3 patches -> vision venv -> build -> smoke
+                              scripts\engine\1-preflight .. 6-smoke
+    recipe  (MiaAI-Lab)       add the four .ps1 to the recipe clone, nothing else
+                              scripts\recipe\1-install-ps1
+
+  With no arguments it asks: where things live (scripts\migration.config.ps1, saved for next time),
+  then which half to run. Every answer becomes a variable that the sub-scripts receive -- no path is
+  written into any script.
+
+  Usage:
     powershell -ExecutionPolicy Bypass -File scripts\Invoke-Migration.ps1
-    powershell -ExecutionPolicy Bypass -File scripts\Invoke-Migration.ps1 -Root E:\ai -Zig E:\tools\zig.exe
-    powershell -ExecutionPolicy Bypass -File scripts\Invoke-Migration.ps1 -SkipVenv     # text only, no vision helper
-    powershell -ExecutionPolicy Bypass -File scripts\Invoke-Migration.ps1 -SkipClone    # patches applied already? no: patch step still checks
-
-  Every step is a separate script; run one on its own when you need to inspect its output.
+    ... -Only engine -NonInteractive            # uses the saved paths, runs the engine half
+    ... -Only recipe                            # only the .ps1 copy
+    ... -Reset                                  # ask the path questions again
+    ... -Root E:\ai -NonInteractive             # a different tree, one run only
 
   Both repositories are pinned, not followed (VERSIONS.md):
-    engine -TfRef     eab85828 = TensorFold v1.1.4
-    recipe -RecipeRef fd3f43e  = the commit the merged recipe patch was cut from
-  Pass -RecipeRef '' to follow the recipe's main instead.
+    engine  eab85828 = TensorFold v1.1.4
+    recipe  fd3f43e  = the commit the merged recipe patch was cut from
 #>
 param(
-    [string]$Root      = 'D:\llm\latest',
-    [string]$Zig       = 'D:\llm\zig-aarch64-windows-0.17.0\zig.exe',
-    [string]$Cuda      = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4',
-    [string]$Vcvars    = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat',
-    [string]$TfRef     = 'eab8582819688325e371907e4706e1c602b8a273',
-    [string]$RecipeRef = 'fd3f43e11238553685ebb68b6d8ab2b112818e3c',
-    [int]$Sm           = 121,
-    [switch]$SkipPreflight,
+    [string]$Root   = '',
+    [ValidateSet('all', 'engine', 'recipe')]
+    [string]$Only   = 'all',
+    [switch]$NonInteractive,
+    [switch]$Reset,
     [switch]$SkipVenv,
-    [switch]$Force
+    [switch]$Force,
+    [int]$Sm        = 0
 )
 
+# Native tools write ordinary progress to stderr, and under 'Stop' PowerShell 5.1 turns such a line
+# into a terminating NativeCommandError. Stay on 'Continue' and check $LASTEXITCODE.
 $ErrorActionPreference = 'Continue'
-$here = $PSScriptRoot
-$TensorFold = Join-Path $Root 'TensorFold'
-$Recipe     = Join-Path $Root 'Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold'
 
-function Stop-Here { param([string]$Step) Write-Host ''; Write-Host "$Step failed: fix it, then re-run from that step." -ForegroundColor Red; exit 1 }
+$here        = $PSScriptRoot
+$engineDir   = Join-Path $here 'engine'
+$recipeSteps = Join-Path $here 'recipe'
 
-if (-not $SkipPreflight) {
-    & (Join-Path $here '1-preflight.ps1') -Zig $Zig -Cuda $Cuda -Vcvars $Vcvars -Root $Root
-    if ($LASTEXITCODE -ne 0) { Stop-Here '1-preflight' }
-}
+function Stop-Here { param([string]$Step) Write-Host ''; Write-Host "$Step failed: fix it, then re-run that step on its own." -ForegroundColor Red; exit 1 }
 
-& (Join-Path $here '2-clone.ps1') -Root $Root -TfRef $TfRef -RecipeRef $RecipeRef -Force:$Force
-if ($LASTEXITCODE -ne 0) { Stop-Here '2-clone' }
+# ---- paths: ask once, save, reuse ----------------------------------------
+. (Join-Path $here 'migration.config.ps1')
+$ask = -not $NonInteractive
+$cfg = Get-MigConfig -Prompt:$ask -Reset:$Reset
+if (-not $cfg) { Write-Host 'cancelled'; exit 1 }
 
-& (Join-Path $here '3-apply-patches.ps1') -TensorFold $TensorFold -TfRef $TfRef
-if ($LASTEXITCODE -ne 0) { Stop-Here '3-apply-patches' }
+$TensorFold = $cfg.EngineDir
+$Recipe     = $cfg.RecipeDir
+if ($Sm -le 0) { $Sm = $cfg.Sm }
 
-if (-not $SkipVenv) {
-    & (Join-Path $here '4-venv.ps1') -Recipe $Recipe
-    if ($LASTEXITCODE -ne 0) { Stop-Here '4-venv' }
-} else {
+# ---- which half ----------------------------------------------------------
+$chosen = $Only
+if ($ask -and -not $PSBoundParameters.ContainsKey('Only')) {
     Write-Host ''
-    Write-Host '  (vision venv skipped: start the server with VISION=0)' -ForegroundColor DarkGray
+    Write-Host 'What should run?' -ForegroundColor Cyan
+    Write-Host '  [1] engine only   TensorFold: clone, 3 patches, vision venv, build, smoke'
+    Write-Host '  [2] recipe only   the four .ps1 into the MiaAI-Lab recipe clone (nothing else changes)'
+    Write-Host '  [3] both'
+    Write-Host '  [q] quit'
+    $pick = (Read-Host '  >').Trim().ToLower()
+    if ($pick -eq 'q') { Write-Host 'cancelled'; exit 1 }
+    if ($pick -eq '1') { $chosen = 'engine' }
+    elseif ($pick -eq '2') { $chosen = 'recipe' }
+    elseif ($pick -eq '' -or $pick -eq '3') { $chosen = 'all' }
+    else { Write-Host "  unknown choice '$pick'"; exit 1 }
 }
 
-& (Join-Path $here '5-build.ps1') -TensorFold $TensorFold -Zig $Zig -Cuda $Cuda -Vcvars $Vcvars -Sm $Sm
-if ($LASTEXITCODE -ne 0) { Stop-Here '5-build' }
+Write-Host ''
+Write-Host ("TensorFold v1.1.4 + Qwen3.8-Flash-Next -- {0}" -f $chosen) -ForegroundColor Magenta
+Write-Host ("  engine: {0}" -f $TensorFold)
+Write-Host ("  recipe: {0}" -f $Recipe)
 
-& (Join-Path $here '6-smoke.ps1') -TensorFold $TensorFold
-if ($LASTEXITCODE -ne 0) { Stop-Here '6-smoke' }
+# ---- engine --------------------------------------------------------------
+if ($chosen -eq 'all' -or $chosen -eq 'engine') {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    & (Join-Path $engineDir '1-preflight.ps1') -Root $cfg.Root -Python $cfg.Python -Zig $cfg.Zig -Cuda $cfg.Cuda -Vcvars $cfg.Vcvars
+    if ($LASTEXITCODE -ne 0) { Stop-Here '1-preflight' }
+
+    & (Join-Path $engineDir '2-clone.ps1') -Root $cfg.Root -TfRef $cfg.TfRef -RecipeRef $cfg.RecipeRef -Force:$Force
+    if ($LASTEXITCODE -ne 0) { Stop-Here '2-clone' }
+
+    & (Join-Path $engineDir '3-apply-patches.ps1') -TensorFold $TensorFold -TfRef $cfg.TfRef
+    if ($LASTEXITCODE -ne 0) { Stop-Here '3-apply-patches' }
+
+    if (-not $SkipVenv) {
+        & (Join-Path $engineDir '4-venv.ps1') -Recipe $Recipe -Python $cfg.Python
+        if ($LASTEXITCODE -ne 0) { Stop-Here '4-venv' }
+    } else {
+        Write-Host ''
+        Write-Host '  (vision venv skipped: start the server with VISION=0)' -ForegroundColor DarkGray
+    }
+
+    & (Join-Path $engineDir '5-build.ps1') -TensorFold $TensorFold -Zig $cfg.Zig -Cuda $cfg.Cuda -Vcvars $cfg.Vcvars -Sm $Sm
+    if ($LASTEXITCODE -ne 0) { Stop-Here '5-build' }
+
+    & (Join-Path $engineDir '6-smoke.ps1') -TensorFold $TensorFold
+    if ($LASTEXITCODE -ne 0) { Stop-Here '6-smoke' }
+
+    $sw.Stop()
+    Write-Host ''
+    Write-Host ("ENGINE OK ({0:N1} min)" -f $sw.Elapsed.TotalMinutes) -ForegroundColor Green
+}
+
+# ---- recipe --------------------------------------------------------------
+if ($chosen -eq 'all' -or $chosen -eq 'recipe') {
+    & (Join-Path $recipeSteps '1-install-ps1.ps1') -Recipe $Recipe -ModelPath $cfg.ModelPath
+    if ($LASTEXITCODE -ne 0) { Stop-Here 'recipe\1-install-ps1' }
+}
 
 Write-Host ''
 Write-Host 'MIGRATION COMPLETE' -ForegroundColor Green
-Write-Host "  engine:  $TensorFold\build\native\bin\tensorfold-native.exe"
-Write-Host "  recipe:  $Recipe"
+Write-Host ("  engine: " + (Join-Path $TensorFold 'build\native\bin\tensorfold-native.exe'))
+Write-Host ("  recipe: " + $Recipe)
 Write-Host ''
-Write-Host '  Next: put the checkpoint at the path start.ps1 expects (see SKILL.md, model location), then:' -ForegroundColor DarkGray
-Write-Host "        cd `"$Recipe`"; .\start.ps1" -ForegroundColor DarkGray
+Write-Host '  Next: put the checkpoint where start.ps1 expects it (MODEL_PATH in the recipe .env), then:' -ForegroundColor DarkGray
+Write-Host ("        cd `"$Recipe`"; .\start.ps1") -ForegroundColor DarkGray
 exit 0

@@ -1,23 +1,33 @@
 #Requires -Version 5.1
 <#
-  Step 5/6 -- build tensorfold-native.exe for aarch64-windows.
+  Engine 5/6 -- build tensorfold-native.exe for aarch64-windows.
 
   The build must run inside a cmd session that has loaded vcvarsall.bat arm64: nvcc locates
   the MSVC compiler for the target through that environment, and a PowerShell `call` cannot
   change its own parent's environment. Without it every .cu fails with "process exited with
   code 1" and nothing else - the classic six-minute dead end.
 
-  All caches and temporaries are redirected under <TensorFold>\build, so nothing lands in the
+  All caches and temporaries are redirected under <engine>\build, so nothing lands in the
   user profile and a re-run is reproducible.
+
+  Paths come from scripts\migration.config.ps1; an explicit parameter wins.
 #>
 param(
-    [string]$TensorFold = 'D://llm//latest//TensorFold',
-    [string]$Zig        = 'D:\llm\zig-aarch64-windows-0.17.0\zig.exe',
-    [string]$Cuda       = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4',
-    [string]$Vcvars     = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat',
-    [int]$Sm            = 121,
+    [string]$TensorFold = '',
+    [string]$Zig        = '',
+    [string]$Cuda       = '',
+    [string]$Vcvars     = '',
+    [int]$Sm            = 0,
     [string]$LogName    = '05-build.log'
 )
+
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'migration.config.ps1')
+$cfg = Get-MigConfig -Quiet
+if (-not $TensorFold) { $TensorFold = $cfg.EngineDir }
+if (-not $Zig)        { $Zig        = $cfg.Zig }
+if (-not $Cuda)       { $Cuda       = $cfg.Cuda }
+if (-not $Vcvars)     { $Vcvars     = $cfg.Vcvars }
+if ($Sm -le 0)        { $Sm         = $cfg.Sm }
 
 # cmd/nvcc write ordinary progress to stderr, and under 'Stop' PowerShell 5.1 turns such a line into a
 # terminating NativeCommandError. Stay on 'Continue' and check $LASTEXITCODE.
@@ -86,7 +96,10 @@ foreach ($a in @($exe, $test)) {
 }
 
 # Anything older than the exe is a stale Triton AOT set: start.ps1 refuses those, but say so here too.
-$kern = Join-Path (Split-Path -Parent $PSScriptRoot) '..\..\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold\build\kernels\sm121\aot.json'
+# The recipe is the engine's sibling (the recipe's own config.ps1 requires that layout), so derive it
+# from -TensorFold instead of from this script's location.
+$recipeDir = Join-Path (Split-Path -Parent $TensorFold) 'Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold'
+$kern = Join-Path $recipeDir 'build\kernels\sm121\aot.json'
 if (Test-Path $kern) {
     if ((Get-Item $kern).LastWriteTimeUtc -lt (Get-Item $exe).LastWriteTimeUtc) {
         Write-Host '  [WARN] build\kernels\sm121\aot.json predates this exe: rename that folder, or start.ps1 will ignore it (it fails with Fp8KvUnsupported)' -ForegroundColor Yellow
@@ -94,5 +107,5 @@ if (Test-Path $kern) {
 }
 
 Write-Host ''
-Write-Host 'BUILD OK - next: 6-smoke.ps1' -ForegroundColor Green
+Write-Host 'BUILD OK - next: scripts\engine\6-smoke.ps1' -ForegroundColor Green
 exit 0

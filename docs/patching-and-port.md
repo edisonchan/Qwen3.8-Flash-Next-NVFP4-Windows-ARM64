@@ -36,15 +36,45 @@
 
 | 阶段 | 动作 | 产物 / 判据 |
 |---|---|---|
+| ⓪ 路径 | `migration.config.ps1` 探测 + 选单（root/python/zig/cuda/vcvars/model），存 `.migration.local.json` | 六行全绿 |
 | ① clone | `git clone` 引擎 + 配方，引擎检出 `eab85828` | `git rev-parse HEAD` |
 | ② 打补丁 | `0001` 配方改造 → `0002` Windows 兼容 → `0003` 加载流水线 | `git status` 78 项，两份 spot-check 绿 |
 | ③ 构建 | `cmd /c` + `vcvarsall arm64` 内跑 `zig build native install -Dsm=121` | `tensorfold-native.exe` 36 MB、`tf-cuda-test.exe` 75 MB |
-| ④ venv（可选） | `--vision` 才需要；装 `tensorfold[vision]` v0.6.6 | `find_spec('tensorfold.vision.native_helper')` 返回 0 |
-| ⑤ 起服 | `.\start.ps1`（配方目录） | `server answered after 71s` + 冒烟 `OK` |
-| ⑥ 收工 | `.\stop.ps1` | `Stopped; its GPU memory is free again` |
+| ④ venv（可选） | `--vision` 才需要；torch 从 NVIDIA OOT 索引，再装 `tensorfold[vision]` v0.6.6 | `find_spec('tensorfold.vision.native_helper')` 返回 0 |
+| ⑤ 配方侧 | `recipe/1-install-ps1.ps1`：放 4 个 `.ps1`，写 `MODEL_PATH` 进 `.env` | 配方 `git status` 只有 `??`，无 ` M` |
+| ⑥ 起服 | `.\start.ps1`（配方目录） | `server answered after 71s` + 冒烟 `OK` |
+| ⑦ 收工 | `.\stop.ps1` | `Stopped; its GPU memory is free again` |
 
 `prepare.sh`（拉基础镜像、编 Docker 镜像、下权重）在 Windows 上没有对应物：没有容器这一层，
 权重是本地目录，"准备"= ① clone + ② 打补丁 + ③ 构建 + venv（见 §6.7）。
+
+### 1.1 两条线：engine 与 recipe
+
+| | 仓库 | 脚本 | 动什么 |
+|---|---|---|---|
+| engine | `ashhart/TensorFold` | `scripts/engine/1-preflight … 6-smoke` | 三份补丁 + 构建，产出 `tensorfold-native.exe` |
+| recipe | `MiaAI-Lab/Qwen3.8-Flash-Next-…` | `scripts/recipe/1-install-ps1.ps1` | **只加文件**：4 个 `.ps1`，`.env` 里的 `MODEL_PATH` |
+
+配方的源码一行不改——这是刻意的。`1-install-ps1.ps1` 结束前自己验一遍：`git -C <配方> status --porcelain`
+应当只有 `??`（新增），没有 ` M`（修改）。`start.ps1`/`stop.ps1` 落在配方根，`config.ps1`/`banner.ps1`
+落在 `scripts\`，与 `.sh` 原件并排，随时可以删掉 `.ps1` 退回 shell 版。
+
+### 1.2 路径不写死
+
+起初文档和脚本里到处是 `D:\llm\latest`——换台机器、换个盘就全崩。现在路径只有一个来源：
+`scripts/migration.config.ps1`。
+
+- **探测**：root 取本仓库所在目录（同级就是两个克隆的位置）；python 取 `PATH` → `%LOCALAPPDATA%\Programs\Python`
+  → `%ProgramFiles%`；zig 取 `PATH` → root 及其上级的 `zig*` 目录；CUDA 取 `CUDA_PATH` → toolkit 安装根（要求有
+  `bin\nvcc.exe`）；vcvars 取任意 VS 2022 安装；权重取 `MODEL_PATH` → `<root 的上级>\model\<name>`。
+- **选单**：六行编号，回车接受，数字改那一行，`?` 弹目录选择框，`d` 重新探测。接受前逐项校验
+  （zig 必须 0.17.0、nvcc 必须 13.4、python 必须 3.11+ 且 aarch64、权重必须 `modelopt`/`MIXED_PRECISION`），
+  有硬伤要求二次确认——否则失败会推迟到三步之后。
+- **固化**：确认结果写 `.migration.local.json`（git 忽略），此后每个脚本 `Get-MigConfig -Quiet` 读它，
+  再没人问第二遍。删掉它就等于"重新探测"。显式参数（`-Zig`、`-TensorFold`…）永远优先。
+
+引擎目录与配方目录不可选：配方自己的 `config.ps1` 就是这么找同级引擎的（`<配方父目录>\TensorFold\build\...`），
+所以只有 root 是一个选项。
 
 ---
 
@@ -124,12 +154,12 @@ tree now: 59 files changed, 3783 insertions(+), 193 deletions(-)
 
 ```powershell
 # 应用（脚本按文件名排序，天然是 0001 → 0002 → 0003）
-powershell -ExecutionPolicy Bypass -File <skill>\scripts\3-apply-patches.ps1 -TensorFold D:\llm\latest\TensorFold
+powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\3-apply-patches.ps1 -TensorFold <root>\TensorFold
 
 # 回滚
-git -C TensorFold reset --hard eab8582819688325e371907e4706e1c602b8a273
-git -C TensorFold clean -fd          # 0001 新增的 19 个未跟踪文件
-git -C TensorFold status --porcelain # 应为空
+git -C <root>\TensorFold reset --hard eab8582819688325e371907e4706e1c602b8a273
+git -C <root>\TensorFold clean -fd   # 0001 新增的 19 个未跟踪文件
+git -C <root>\TensorFold status --porcelain # 应为空
 ```
 
 **顺序不可换**：0003 的上下文里有 0001 改过的行。手工 apply 时反了会直接 `--check` 失败（好事，不会半残）。
@@ -366,20 +396,72 @@ foreach ($n in 'HTTPS_PROXY','https_proxy','HTTP_PROXY','http_proxy','ALL_PROXY'
 
 ### 6.1 文件对照
 
+这四份是**唯一进入配方仓库**的文件，由 `scripts\recipe\1-install-ps1.ps1` 拷贝：
+
 | Linux（配方原版） | Windows（本机） | 说明 |
 |---|---|---|
 | `start.sh`（259 行） | `start.ps1`（308 行） | 5 步流程一一对应，启动方式从 Docker 换成本机进程 |
 | `stop.sh`（24 行） | `stop.ps1`（19 行） | `docker stop/rm` → 按 pid 文件杀进程（含孤儿兜底） |
-| `scripts/config.sh`（201 行） | `scripts/config.ps1`（242 行） | 默认值、`.env`、内存/KV 计算、探测辅助函数 |
+| `scripts/config.sh`（201 行） | `scripts/config.ps1`（246 行） | 默认值、`.env`、内存/KV 计算、探测辅助函数 |
 | `scripts/banner.sh`（28 KB 终端画） | `scripts/banner.ps1`（1.4 KB） | **不复制**画面，运行时用正则从 `banner.sh` 抽 |
-| `scripts/prepare.sh`（14.6 KB） | 无 | 它做的是 Docker 镜像 + 下载权重，Windows 上由 skill 的 clone/patch/build/venv 取代 |
+
+剩下这些**留在 skill 目录**，只在需要时被调用一次，不进配方（配方仓库因此保持 `0 modified`）：
+
+| Linux（配方原版） | Windows（本机） | 说明 |
+|---|---|---|
+| `scripts/prepare.sh`（14.6 KB） | `scripts\engine\` 下 1–6 | 它做的是「拉镜像 + 装依赖 + 下 zig + 打补丁 + 编译 + 下权重 + `docker build`」，Windows 上拆成六个可单独重跑的步骤，见 §1 的流程表 |
+| `Dockerfile` 里 `ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.07-py3` | `scripts\engine\4-venv.ps1` | **容器自带 torch，本机没有** → 在配方目录里建 `venv` 并装 torch（vision 才需要，见下节） |
+| `pip install tensorfold[vision]`（在镜像里做） | 同上，`4-venv.ps1` 第二步 | 先 torch 后 `tensorfold[vision] @ v0.6.6`，顺序不能反 |
+
+### 6.1.1 torch 与 venv：容器里白拿的东西，本机得自己装
+
+Linux 那条路根本没"装 torch"这一步——`nvcr.io/nvidia/pytorch:26.07-py3` 里已经有一份和
+CUDA 13.4 对得上的 build。Windows 上没有任何轮子能直接用，所以要在**配方目录**里建 venv：
+
+```
+<root>\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold\venv\
+```
+
+之所以必须在配方目录，是因为 `recipe\config.ps1` 自己就是这么找的：
+
+```powershell
+$VenvDir      = Get-Setting 'VENV_DIR'      (Join-Path $RecipeDir 'venv')
+$VisionPython = Get-Setting 'TENSORFOLD_VISION_PYTHON' (Join-Path $VenvDir 'Scripts\python.exe')
+```
+
+`start.ps1` 里那一段（`--vision` 时才走）：
+
+```powershell
+if (-not (Test-Path $VisionPython)) { Die "vision is on but the venv python is missing: $VisionPython (set VENV_DIR or VISION=0)" }
+& $VisionPython -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('tensorfold.vision.native_helper') else 1)"
+Set-EnvVar 'TENSORFOLD_VISION_PYTHON' $VisionPython
+```
+
+所以 `venv` 默认落在配方目录；真要搬走，`.env` 里给 `VENV_DIR` 就行（`start.ps1` 会跟着改
+`TENSORFOLD_VISION_PYTHON`），但 `4-venv.ps1` 的默认值也是这个位置，两边别改岔了。
+
+两条命令，**顺序不能换**：
+
+```powershell
+# 1) torch 必须走 NVIDIA 的 nightly 索引，PyPI 上的 arm64 wheel 对不上 CUDA 13.4
+python -m pip install --pre --upgrade --only-binary=:all: `
+  --extra-index-url 'https://pypi.nvidia.com/nvtorch_oot_nightly' torch torchvision torchaudio
+
+# 2) 再装带 vision 的 tensorfold（0.6.6 才带 native_helper）
+python -m pip install "tensorfold[vision] @ git+https://github.com/ashhart/TensorFold.git@v0.6.6"
+```
+
+反过来的话，第 2 步会把 PyPI 的普通 `torch` 当依赖拉进来，装完 `cuda.is_available()` 是 `False`，
+而且不会报错——只有真跑 `--vision` 时才炸。`4-venv.ps1` 就是按这个顺序写的，并且装完会回读
+`torch.__version__` / `torch.version.cuda` / `cuda.is_available()` 和
+`find_spec('tensorfold.vision.native_helper')`，不绿就不算完成。
 
 ### 6.2 结构性差异（六处，决定了后面所有改写）
 
 | 维度 | Linux 原版 | Windows 版 |
 |---|---|---|
 | 运行载体 | `docker run -d --gpus all --ipc=host --network host` | `Start-Process tensorfold-native.exe`，直接跑在宿主 |
-| 模型路径 | HF cache 快照挂到 `/root/.cache/huggingface`，用 `/root/...` 路径传参 | 本地目录 `D:\llm\model\...`，`MODEL_PATH` 直接传 |
+| 模型路径 | HF cache 快照挂到 `/root/.cache/huggingface`，用 `/root/...` 路径传参 | 本地目录（选单第 6 项），`MODEL_PATH` 直接传，由 `1-install-ps1.ps1` 写进配方 `.env` |
 | 日志 | `docker logs -f`（一个流） | 两个文件 `serve-*.out.log` / `serve-*.err.log`，用 `StreamReader` 轮询 |
 | 单实例保护 | `flock -n 8` 独占锁文件 | pid 文件 + 端口监听探测（`flock` 在 Windows 无等价物） |
 | 停止 | `docker stop -t N` 再 `docker rm -f` | `Stop-Process -Force` + 轮询到期；再按 exe 路径 / LISTEN socket 找孤儿 |
@@ -471,7 +553,8 @@ Linux 那套"环境优先、`.env` 只补空缺"的语义会让旧默认值反�
 `prepare.sh` 干的是：拉基础镜像 → 下 zig → 打补丁 → 编 zig/CUDA → 装两个图像解码库 → 下权重 →
 `docker build` 打标签（标签里带补丁哈希，用来判"镜像是否过期"）。
 
-Windows 上没有容器这一层，"准备"退化成几件独立的事，也就是 skill 的 `scripts\` 里那几步：
+Windows 上没有容器这一层，"准备"退化成几件独立的事，也就是 skill 的 `scripts\engine\` 里那六步
+（配方侧只有 `scripts\recipe\1-install-ps1.ps1` 一件事：放 `.ps1`）：
 
 | 原 `prepare.sh` 的活 | Windows 上怎么做 |
 |---|---|
@@ -480,7 +563,8 @@ Windows 上没有容器这一层，"准备"退化成几件独立的事，也就�
 | `git clone` + 打 17 个补丁 | `2-clone.ps1` + `3-apply-patches.ps1`（三份合并补丁） |
 | 编 CUDA / zig | `5-build.ps1`（`cmd /c` + `vcvarsall arm64` 内跑 `zig build`） |
 | 装 libjpeg-turbo / libwebp | 不需要：exe 旁边已有 `turbojpeg.dll` / `libwebpdecoder.so.3` |
-| 下权重（HF snapshot） | `hf download nvidia/Qwen3.8-Flash-Next-FP4-Local --revision b9ce18a6… --local-dir D:\llm\model\...`；国内可用 ModelScope 镜像 `modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_dir D:\llm\model\...` |
+| 下权重（HF snapshot） | `hf download nvidia/Qwen3.8-Flash-Next-FP4-Local --revision b9ce18a6… --local-dir <模型目录>`；国内可用 ModelScope 镜像 `modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_dir <模型目录>`（`<模型目录>` 就是选单第 6 项，会写进配方 `.env` 的 `MODEL_PATH`） |
+| 装 torch（镜像里白拿） | `4-venv.ps1`：在**配方目录**建 `venv`，先 torch 后 `tensorfold[vision]`，见 §6.1.1 |
 | 镜像标签当"过期判据" | 没有镜像了 → 由 `3-apply-patches.ps1` 的 78 项与 exe 时间戳替代 |
 
 ---
@@ -488,16 +572,29 @@ Windows 上没有容器这一层，"准备"退化成几件独立的事，也就�
 ## 7. 验收清单（命令级）
 
 ```powershell
+# 0) 路径先定下来（只做一次；之后所有脚本读同一个 .migration.local.json）
+powershell -ExecutionPolicy Bypass -File <skill>\scripts\Invoke-Migration.ps1 -Reset
+#    → 六行编号：root / python / zig / cuda / vcvars / model，d 重探、? 浏览、回车接受
+#    下面把选定的 root 记作 <root>（形如 D:\llm\latest），引擎目录固定是 <root>\TensorFold
+
 # 1) 补丁打全了吗（应列出三份，两处 spot-check 绿）。下面 <skill> = skill 目录
-powershell -ExecutionPolicy Bypass -File <skill>\scripts\3-apply-patches.ps1 -TensorFold D:\llm\latest\TensorFold
-git -C D:\llm\latest\TensorFold status --porcelain --untracked-files=all | Measure-Object | % Count   # 期望 78
+powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\3-apply-patches.ps1 -TensorFold <root>\TensorFold
+git -C <root>\TensorFold status --porcelain --untracked-files=all | Measure-Object | % Count   # 期望 78
 
 # 2) 编出来了吗
-powershell -ExecutionPolicy Bypass -File <skill>\scripts\5-build.ps1 -TensorFold D:\llm\latest\TensorFold   # BUILD_EXIT=0
-powershell -ExecutionPolicy Bypass -File <skill>\scripts\6-smoke.ps1                                        # 三项 OK
+powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\5-build.ps1 -TensorFold <root>\TensorFold   # BUILD_EXIT=0
+powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\6-smoke.ps1                                # 三项 OK
 
-# 3) 加载快了吗（在配方目录里跑）
-cd D:\llm\latest\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold
+# 3) venv 就位了吗（vision 才需要；不跑 --vision 可跳过）
+powershell -ExecutionPolicy Bypass -File <skill>\scripts\engine\4-venv.ps1     # 结尾应报 cuda True
+Test-Path <root>\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold\venv\Scripts\python.exe   # True
+
+# 4) 配方侧的四个 .ps1 装好了吗（这一步是唯一会写配方目录的）
+powershell -ExecutionPolicy Bypass -File <skill>\scripts\recipe\1-install-ps1.ps1
+git -C <root>\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold status --porcelain   # 只有 ?? 没有 " M"
+
+# 5) 加载快了吗（在配方目录里跑）
+cd <root>\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold
 $env:TENSORFOLD_LOAD_STATS='1'; .\start.ps1       # 期望 server answered after ~71s
 
 $err = Get-ChildItem build\logs\serve-*.err.log | Sort-Object LastWriteTime | Select-Object -Last 1
@@ -505,10 +602,10 @@ $err = Get-ChildItem build\logs\serve-*.err.log | Sort-Object LastWriteTime | Se
 Get-Content $err -Encoding Default | Select-String 'stage wait' | Select-Object -Last 3   # 每组 0-50 ms
 # Git Bash 里等价：grep -a "layer .* took" build/logs/serve-*.err.log | wc -l
 
-# 4) 权重没装错吗
+# 6) 权重没装错吗
 #    POST /v1/chat/completions "Answer with one word: capital of France" → Paris
 
-# 5) 收工
+# 7) 收工
 .\stop.ps1                                   # Stopped; its GPU memory is free again
 ```
 

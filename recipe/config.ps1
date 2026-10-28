@@ -44,9 +44,12 @@ if (Test-Path $envFile) {
 # check config.json says quant_method=modelopt and quant_algo=MIXED_PRECISION -- a GPTQ re-upload (the int4
 # preset below) is refused at load with UnsupportedCheckpoint.
 $CHECKPOINT = Get-Setting 'CHECKPOINT' 'nvfp4'
+# Fallback only: .env normally carries MODEL_PATH (scripts\recipe\1-install-ps1.ps1 writes it from
+# the path menu). Derived as <parent of the recipe>\model so no drive letter is baked in here.
+$ModelRoot  = Join-Path (Split-Path -Parent $RecipeDir) 'model'
 switch ($CHECKPOINT) {
     'nvfp4' {
-        $ModelPath  = Get-Setting 'MODEL_PATH' (Join-Path 'D:\llm\model' 'Qwen3.8-Flash-Next-FP4-Local')
+        $ModelPath  = Get-Setting 'MODEL_PATH' (Join-Path $ModelRoot 'Qwen3.8-Flash-Next-FP4-Local')
         $WeightsGiB = [double](Get-Setting 'WEIGHTS_GIB' 81)
         $QuantLabel = 'NVIDIA FP4 QAD: NVFP4 experts, MXFP8'
     }
@@ -55,7 +58,7 @@ switch ($CHECKPOINT) {
         # `quant_algo = MIXED_PRECISION` (NVFP4 routed experts, MXFP8 shared experts and attention projections).
         # azampatti's INT4-AutoRound checkpoint is GPTQ: the engine refuses it at load with UnsupportedCheckpoint.
         # The preset stays for the record (the Linux image's older engine took it); on Windows use nvfp4.
-        $ModelPath  = Get-Setting 'MODEL_PATH' (Join-Path 'D:\llm\model' 'Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound')
+        $ModelPath  = Get-Setting 'MODEL_PATH' (Join-Path $ModelRoot 'Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound')
         $WeightsGiB = [double](Get-Setting 'WEIGHTS_GIB' 66)
         $QuantLabel = 'INT4-AutoRound (NOT loadable by the v1.1.4 CUDA engine: GPTQ, not modelopt)'
     }

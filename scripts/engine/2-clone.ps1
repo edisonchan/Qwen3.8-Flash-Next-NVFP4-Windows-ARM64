@@ -1,17 +1,18 @@
 #Requires -Version 5.1
 <#
-  Step 2/6 -- clone both repositories and pin each to the commit the patch series describes.
+  Engine 2/6 -- clone both repositories and pin each to the commit the patch series describes.
 
-  Two pins, both from VERSIONS.md:
+  Two pins, both from VERSIONS.md (overridable here or in .migration.local.json):
     engine  -TfRef     eab8582819688325e371907e4706e1c602b8a273   (tag v1.1.4, the recipe's TF_REF)
     recipe  -RecipeRef fd3f43e11238553685ebb68b6d8ab2b112818e3c   (the commit 0001 was cut from)
 
   Layout is fixed by the recipe: scripts\config.ps1 looks for the engine at
   '<parent of the recipe>\TensorFold\build\native\bin\tensorfold-native.exe', so the two
   clones must be siblings and the engine clone must be named exactly 'TensorFold'.
+  Root comes from scripts\migration.config.ps1 -- nothing here assumes D:\llm\latest.
 #>
 param(
-    [string]$Root       = 'D:\llm\latest',
+    [string]$Root       = '',
     [string]$RecipeRepo = 'https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold',
     [string]$TfRepo     = 'https://github.com/ashhart/TensorFold',
     [string]$TfRef      = 'eab8582819688325e371907e4706e1c602b8a273',   # v1.1.4, see VERSIONS.md
@@ -19,6 +20,10 @@ param(
                                                                         # (pass '' to follow the recipe's main)
     [switch]$Force
 )
+
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'migration.config.ps1')
+$cfg = Get-MigConfig -Quiet
+if (-not $Root) { $Root = $cfg.Root }
 
 # Native tools (git) write ordinary progress to stderr, and under 'Stop' PowerShell 5.1 turns such a line
 # into a terminating NativeCommandError. Stay on 'Continue' and check $LASTEXITCODE.

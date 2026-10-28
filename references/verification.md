@@ -13,6 +13,9 @@
 | 引擎 | `ashhart/TensorFold` @ `eab8582819688325e371907e4706e1c602b8a273`（tag v1.1.4） |
 | 配方 | `MiaAI-Lab/Qwen3.8-...-TensorFold` @ `fd3f43e11238553685ebb68b6d8ab2b112818e3c`（钉住的提交，非 main 游标） |
 
+> 上面 zig / CUDA / MSVC 的盘符路径是**本机当时的实测位置**，只作为复现记录；脚本本身不依赖它们——
+> 每个脚本都 dot-source `scripts\migration.config.ps1` 再从 `.migration.local.json` 取路径（见 SKILL §0.1）。
+
 ## 2. 补丁一致性（逐字节）
 
 做法：新建干净克隆 → 检出 `eab85828` → 应用 `0001` + `0002` → 与当时的生产工作树逐文件比 sha256。
@@ -79,6 +82,25 @@ CUDA: driver CUDA 13050, device NVIDIA RTX Spark N1X (6144-core Blackwell RTX GP
 | `3-apply-patches.ps1` | 在第三个干净克隆上跑通；三份 sha256 与文档一致；两处 spot-check 通过 |
 | `5-build.ps1` | 在第三个克隆上跑通：`BUILD_EXIT=0`，6.6 分钟，产物 34.5 MB / 75 MB |
 | `6-smoke.ps1` | 三项 `[ OK ]` |
+
+### 4.1 路径菜单化 + engine/recipe 拆分之后（2026-10-27 复测）
+
+脚本从 `scripts\*.ps1` 搬到 `scripts\engine\`、新增 `scripts\recipe\`，路径改由选单提供，因此逐条重验：
+
+| 脚本 | 结果 |
+|---|---|
+| `migration.config.ps1`（选单） | 六项探测命中本机实际位置；把 zig 故意指到 `C:\nope` 时报硬伤并要求 `y/N` 确认；拒绝后可改回；写出 `.migration.local.json` 六个键 |
+| `engine\1-preflight.ps1` | `PREFLIGHT OK: 0 blocking problems`；python `3.13.16 ARM64`、zig `0.17.0`、nvcc `13.4`、cuBLASLt、MSVC arm64 `cl`、GPU `RTX Spark N1X`、`free space on D: 1,005.4 GiB` |
+| `engine\3-apply-patches.ps1` | 在临时 worktree 上重打三份：sha256 全对、`59 files changed, 3783 insertions(+), 193 deletions(-)`、`entries=78`、两处 spot-check 绿；4 个文件与生产树 sha256 一致；`git worktree remove` 后生产树仍 78 项 |
+| `engine\6-smoke.ps1` | `SMOKE OK`；且改用 .NET `Process` 读原始流后，`device: ... 113136 MiB total, 105721 MiB free, kernels embedded true` 这一整行不再被折行吞掉 |
+| `recipe\1-install-ps1.ps1` | 首装 4 个全 `added`；改动 `config.ps1` 后 `-Force` 重跑报 `1 replaced, 3 unchanged`；再复跑报 `0 added, 0 replaced, 4 unchanged`。三次的配方 `git status` 都是 `6 untracked entries, 0 modified`（结论行 `the recipe itself is unmodified: only new files were added`） |
+| 九个 `.ps1` | 全部通过 `[Parser]::ParseFile` 语法校验 |
+
+**没在实机跑的两项**（会在真机上补）：
+
+- `engine\4-venv.ps1` —— 会从 NVIDIA nightly 索引拉几 GB 的 torch，只做了语法校验与参数校验；
+  逻辑顺序（先 torch 后 `tensorfold[vision]`）与 `recipe\config.ps1` 的 `$VenvDir` 路径已对齐。
+- `Invoke-Migration.ps1` 的交互菜单 —— 只做了语法校验；菜单本身（`Read-MigMenu`）已用脚本化应答单独测过。
 
 ## 5. 补丁哈希
 

@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 <#
-  Step 3/6 -- apply the three patches that turn the v1.1.4 release into the recipe's engine.
+  Engine 3/6 -- apply the three patches that turn the v1.1.4 release into the recipe's engine.
 
     patches\0001-recipe-0001-0017-on-v1.1.4.patch   the recipe's patches 0001..0017, flattened
                                                     onto eab85828 (74 files, +3.5k lines)
@@ -14,13 +14,20 @@
   Each one is checked with `git apply --check` first, so a mismatched tree stops before it is touched.
   Order matters: 0003 was cut against a tree that already had 0001 + 0002, and two of its files
   (cuda_prompt.zig, cuda_prompt_wt.zig) were touched by 0001. The name sort below keeps that order.
+
+  The patch folder is resolved from this file's location (..\..\patches), so a clone at any path works;
+  the engine tree comes from scripts\migration.config.ps1 unless -TensorFold is passed.
 #>
 param(
-    [string]$TensorFold = 'D://llm//latest//TensorFold',
-    [string]$PatchDir   = (Join-Path (Split-Path -Parent $PSScriptRoot) 'patches'),
+    [string]$TensorFold = '',
+    [string]$PatchDir   = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'patches'),
     [string]$TfRef      = 'eab8582819688325e371907e4706e1c602b8a273',
     [switch]$AllowDirty
 )
+
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'migration.config.ps1')
+$cfg = Get-MigConfig -Quiet
+if (-not $TensorFold) { $TensorFold = $cfg.EngineDir }
 
 # Native tools (git) write ordinary progress to stderr, and under 'Stop' PowerShell 5.1 turns such a line
 # into a terminating NativeCommandError. Stay on 'Continue' and check $LASTEXITCODE.

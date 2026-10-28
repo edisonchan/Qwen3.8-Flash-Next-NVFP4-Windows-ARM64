@@ -27,7 +27,10 @@ ARM64（GB10 / `sm_121`）的**非官方**版本。同一个 NVFP4 权重、同�
 | `patches/0001-recipe-0001-0017-on-v1.1.4.patch` | MiaAI-Lab 的 17 个配方补丁，合并成一份、对齐 TensorFold v1.1.4（`eab85828`），74 个文件 |
 | `patches/0002-windows-arm64-port.patch` | 5 处 MSVC/Windows 兼容修复。三个 `.cu` 文件里只给模板显式实例化的参数表补 `__restrict__`，不动任何 kernel 算术 |
 | `patches/0003-load-pipeline.patch` | 4 个 host 侧加载文件：分组并行装配、pinned 双缓冲、更大的分片映射缓存、整块拷贝 |
-| `scripts/1-preflight.ps1` … `6-smoke.ps1`、`Invoke-Migration.ps1` | 迁移流程本身，一个脚本一步 |
+| `scripts/migration.config.ps1` | 路径的唯一来源：探测 root、python、zig、CUDA、`vcvarsall`、权重目录；交互选单；结果存到 `.migration.local.json` |
+| `scripts/engine/1-preflight.ps1` … `6-smoke.ps1` | **引擎侧**（TensorFold）：预检、克隆、3 份补丁、vision venv、构建、冒烟 |
+| `scripts/recipe/1-install-ps1.ps1` | **配方侧**，也是唯一往 MiaAI-Lab 克隆里写东西的脚本：放 4 个 `.ps1`、把 `MODEL_PATH` 写进 `.env`，别的都不动 |
+| `scripts/Invoke-Migration.ps1` | 一键总控：先问路径，再选跑引擎侧、配方侧还是两边 |
 | `recipe/start.ps1`、`stop.ps1`、`config.ps1`、`banner.ps1` | 配方 shell 脚本的 PowerShell 版，含两个 PowerShell 5.1 的真 bug 修复（`[string]` 默认值把 `$null` 变成空串；5.1 的 `Invoke-RestMethod` 默认动词是 POST） |
 | `SKILL.md`、`references/` | 同一套流程的 agent 可执行形态（WorkBuddy / Claude skill 布局），外加构建笔记与验证记录 |
 | `docs/patching-and-port.md` | 长文：每份补丁怎么切出来的、踩了什么、`.sh → .ps1` 的取舍逐条 |
@@ -40,32 +43,70 @@ ARM64（GB10 / `sm_121`）的**非官方**版本。同一个 NVFP4 权重、同�
 git clone https://github.com/edisonchan/Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
 cd Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
 
-# 预检 -> 克隆两个仓库 -> 打 3 份补丁 -> vision venv -> 构建 -> 冒烟
-.\scripts\Invoke-Migration.ps1 -Root D:\llm\latest
+.\scripts\Invoke-Migration.ps1
 ```
+
+它先列出它认为的各个位置（root、python、zig、CUDA、`vcvarsall`、权重目录），每一行都可以改；然后问你跑
+哪一半。没有任何路径写死，换盘、换目录都能用。
 
 想逐步看每一段，就分开跑：
 
 ```powershell
-.\scripts\1-preflight.ps1
-.\scripts\2-clone.ps1
-.\scripts\3-apply-patches.ps1 -TensorFold D:\llm\latest\TensorFold   # 期望 78 项、3 份补丁、2 处 spot-check 全绿
-.\scripts\4-venv.ps1
-.\scripts\5-build.ps1  -TensorFold D:\llm\latest\TensorFold          # BUILD_EXIT=0，约 5 分钟
-.\scripts\6-smoke.ps1  -TensorFold D:\llm\latest\TensorFold          # version 1.1.4 / nvidia-sm121 / OK
+.\scripts\engine\1-preflight.ps1
+.\scripts\engine\2-clone.ps1
+.\scripts\engine\3-apply-patches.ps1          # 期望 78 项、3 份补丁、2 处 spot-check 全绿
+.\scripts\engine\4-venv.ps1                   # 先从 NVIDIA 索引装 torch，再装 tensorfold[vision]
+.\scripts\engine\5-build.ps1                  # BUILD_EXIT=0，约 5 分钟
+.\scripts\engine\6-smoke.ps1                  # version 1.1.4 / nvidia-sm121 / OK
+.\scripts\recipe\1-install-ps1.ps1            # 4 个 .ps1 放进配方克隆
 ```
+
+每一步都读已保存的路径，所以都不用传参数。真要覆盖就直接传（`-TensorFold E:\ai\TensorFold` 这种），
+`-Reset` 会重新问一遍路径。
+
+### 路径
+
+`scripts\migration.config.ps1` 是唯一决定"东西放哪"的地方。它先探测候选：root 取本仓库所在的目录，
+python / zig 取 `PATH` 与常见安装目录，CUDA 取 `CUDA_PATH` 与 toolkit 安装根，`vcvarsall` 取任意 VS 2022
+安装，权重取 `MODEL_PATH` 与 `<root 的上级>\model`；然后选单让你确认或修改。确认后的结果写进
+`.migration.local.json`（已 git 忽略），下次一键复用，所有脚本看到的是同一组值。
+
+参考机上的样子（你的机器探测到什么就显示什么）：
+
+```
+ [1] root     D:\llm\latest
+ [2] python   C:\Users\you\AppData\Local\Programs\Python\Python313-arm64\python.exe
+ [3] zig      D:\llm\zig-aarch64-windows-0.17.0\zig.exe
+ [4] cuda     C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4
+ [5] vcvars   C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat
+ [6] model    D:\llm\model\Qwen3.8-Flash-Next-FP4-Local
+```
+
+引擎与配方目录由 `root` 推导（`<root>\TensorFold`、`<root>\Qwen3.8-Flash-Next-…`），因为配方自己的
+`config.ps1` 就是这么找同级引擎的；可选的只有 `root`。
+
+### 两半、两个仓库
+
+| | 动到什么 | 脚本 |
+|---|---|---|
+| **引擎** | TensorFold：打 3 份补丁，然后构建 | `scripts\engine\` |
+| **配方** | MiaAI-Lab 的克隆：加 4 个 `.ps1`，`.env` 写入 `MODEL_PATH`——他们的代码一行不改 | `scripts\recipe\` |
+
+`recipe\1-install-ps1.ps1` 自己会验这句话：结束时跑 `git -C <配方> status --porcelain`，期望只有新增文件、
+没有修改。
 
 两个克隆都是**钉版本**，不是跟分支：引擎钉 `v1.1.4`，配方钉在补丁 `0001` 所对应的那个提交（见
 [`VERSIONS.md`](VERSIONS.md)）。若配方的 `main` 已经走过该提交，`2-clone.ps1` 会给出告警；
 只有你确实想跟随时才传 `-RecipeRef ''`。
 
-起服务。克隆下来的配方里是 `.sh`，把 PowerShell 那四个拷进去：
+起服务。克隆下来的配方里是 `.sh`，安装脚本把 PowerShell 那四个放到旁边：
 
 ```powershell
-$Q = 'D:\llm\latest\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold'
-Copy-Item .\recipe\start.ps1, .\recipe\stop.ps1            $Q
-Copy-Item .\recipe\config.ps1, .\recipe\banner.ps1  "$Q\scripts"
+.\scripts\recipe\1-install-ps1.ps1      # start.ps1、stop.ps1、scripts\config.ps1、scripts\banner.ps1
 
+# 路径不用手打：读回选单接受的那一份
+$root = (Get-Content .migration.local.json -Raw | ConvertFrom-Json).root
+$Q    = Join-Path $root 'Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold'
 # 这类机器整机只有 30.5 GB host 内存：5 流要 23.74 GiB 的 KV，准入预算 22.81 GiB，放不下；
 # 而且它是 48 层全加载完之后才报错，很容易误判成"加载慢"。4 流可以正常起服。
 Add-Content "$Q\.env" @('TENSORFOLD_LOAD_STATS=1', 'PARALLEL=4')
@@ -73,6 +114,27 @@ Add-Content "$Q\.env" @('TENSORFOLD_LOAD_STATS=1', 'PARALLEL=4')
 & "$Q\start.ps1"    # [start.ps1] server answered after 71s
 & "$Q\stop.ps1"
 ```
+
+### Python 与 torch
+
+`engine\4-venv.ps1` 在**配方目录里**建 venv（`<配方>\venv`），因为 `start.ps1` 就在那儿找
+`Scripts\python.exe`。它按这个顺序装：
+
+```powershell
+# 1. torch 来自 NVIDIA 的 out-of-tree nightly 索引——配方在自家平台上是靠 nvcr.io/nvidia/pytorch
+#    基础镜像拿到这些包的，而 Windows 上没有那个镜像
+python -m pip install --pre --upgrade --only-binary=:all: `
+  --extra-index-url https://pypi.nvidia.com/nvtorch_oot_nightly torch torchvision torchaudio
+
+# 2. vision 包；v1.1.4 的 setup.py 拒绝以 Python 包安装，所以用 v0.6.6
+python -m pip install "tensorfold[vision] @ git+https://github.com/ashhart/TensorFold.git@v0.6.6"
+
+# 3. start.ps1 开 vision 之前跑的那条探测
+python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('tensorfold.vision.native_helper') else 1)"
+```
+
+顺序有意义：先装 `tensorfold[vision]` 的话，pip 会把 PyPI 上的普通 torch 当依赖拉进来。纯文本服务
+（`VISION=0`）可以整段跳过；已经有可信 torch 的话加 `-SkipTorch`。
 
 ### 权重
 
@@ -115,6 +177,9 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 
 Windows 11 ARM64 · GB10（128 GB 统一内存、20 核）· CUDA 13.4 · Zig 0.17.0（aarch64-windows）·
 MSVC 2022 Build Tools（含 ARM64 host）· PowerShell 5.1 · 仅 `--vision` 需要 Python 3.13 arm64。
+
+没有任何路径是写死的：`scripts\migration.config.ps1` 负责找，`.migration.local.json` 记住你确认过的值。
+`1-preflight.ps1` 对 zig ≠ 0.17.0 直接判失败，对 nvcc 不是 13.4 给告警。
 
 ## 许可
 

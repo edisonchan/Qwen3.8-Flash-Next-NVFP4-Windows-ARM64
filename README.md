@@ -36,7 +36,10 @@ the same tree that was measured; [`VERSIONS.md`](VERSIONS.md) explains each pin 
 | `patches/0001-recipe-0001-0017-on-v1.1.4.patch` | MiaAI-Lab's 17 recipe patches, merged into one diff against TensorFold v1.1.4 (`eab85828`), 74 files |
 | `patches/0002-windows-arm64-port.patch` | 5 MSVC/Windows compatibility fixes. In the three `.cu` files the only change is `__restrict__` on explicit instantiation argument lists; no kernel arithmetic is touched |
 | `patches/0003-load-pipeline.patch` | 4 host-side loader files: staged parallel expert packing, pinned double buffering, a wider shard-mapping cache, whole-row copies |
-| `scripts/1-preflight.ps1` … `6-smoke.ps1`, `Invoke-Migration.ps1` | The migration itself, one step per script |
+| `scripts/migration.config.ps1` | Where everything lives: detects root, python, zig, CUDA, `vcvarsall`, checkpoint; the interactive menu; saves the answers to `.migration.local.json` |
+| `scripts/engine/1-preflight.ps1` … `6-smoke.ps1` | The **engine** half (TensorFold): preflight, clone, 3 patches, vision venv, build, smoke |
+| `scripts/recipe/1-install-ps1.ps1` | The **recipe** half, and the only script that writes into the MiaAI-Lab clone: copies four `.ps1` in, sets `MODEL_PATH` in `.env`, changes nothing else |
+| `scripts/Invoke-Migration.ps1` | One-shot runner: asks for paths, then runs the engine half, the recipe half, or both |
 | `recipe/start.ps1`, `stop.ps1`, `config.ps1`, `banner.ps1` | The recipe's shell scripts as PowerShell, including two PowerShell 5.1 bug fixes (`$null` becomes `''` in a `[string]` default; 5.1's `Invoke-RestMethod` defaults to POST) |
 | `SKILL.md`, `references/` | The same procedure in agent-facing form (WorkBuddy/Claude skill layout), plus build notes and the verification record |
 | `docs/patching-and-port.md` | Long form: how each patch was cut, what broke, and the `.sh` → `.ps1` decisions one by one |
@@ -49,32 +52,72 @@ the same tree that was measured; [`VERSIONS.md`](VERSIONS.md) explains each pin 
 git clone https://github.com/edisonchan/Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
 cd Qwen3.8-Flash-Next-NVFP4-Windows-ARM64
 
-# preflight -> clone both repos -> 3 patches -> vision venv -> build -> smoke
-.\scripts\Invoke-Migration.ps1 -Root D:\llm\latest
+.\scripts\Invoke-Migration.ps1
 ```
+
+It first shows where it thinks everything is (root, python, zig, CUDA, `vcvarsall`, checkpoint) and lets you
+change any row — then asks which half to run. Nothing is hard-coded, so this works from any disk or folder.
 
 Step by step, if you want to see each stage:
 
 ```powershell
-.\scripts\1-preflight.ps1
-.\scripts\2-clone.ps1
-.\scripts\3-apply-patches.ps1 -TensorFold D:\llm\latest\TensorFold   # expect 78 entries, 3 patches, 2 spot-checks
-.\scripts\4-venv.ps1
-.\scripts\5-build.ps1  -TensorFold D:\llm\latest\TensorFold          # BUILD_EXIT=0, ~5 min
-.\scripts\6-smoke.ps1  -TensorFold D:\llm\latest\TensorFold          # version 1.1.4 / nvidia-sm121 / OK
+.\scripts\engine\1-preflight.ps1
+.\scripts\engine\2-clone.ps1
+.\scripts\engine\3-apply-patches.ps1          # expect 78 entries, 3 patches, 2 spot-checks
+.\scripts\engine\4-venv.ps1                   # torch from NVIDIA's index, then tensorfold[vision]
+.\scripts\engine\5-build.ps1                  # BUILD_EXIT=0, ~5 min
+.\scripts\engine\6-smoke.ps1                  # version 1.1.4 / nvidia-sm121 / OK
+.\scripts\recipe\1-install-ps1.ps1            # the four .ps1 into the recipe clone
 ```
+
+Every step reads the saved paths, so none of them needs an argument. A parameter you pass still wins
+(`-TensorFold E:\ai\TensorFold`), and `-Reset` re-opens the path questions.
+
+### Paths
+
+`scripts\migration.config.ps1` is the single place that decides where things are. It detects candidates —
+root from where this repository sits, python/zig from `PATH` and the usual install folders, CUDA from
+`CUDA_PATH` and the toolkit's install root, `vcvarsall` from any VS 2022 install, the checkpoint from
+`MODEL_PATH` and `<parent of root>\model` — then the menu lets you accept or change each row. The accepted
+set goes to `.migration.local.json` (git-ignored), so a re-run is one keystroke and every script sees the
+same values.
+
+Sample run (values on the reference machine — yours will be whatever it detects):
+
+```
+ [1] root     D:\llm\latest
+ [2] python   C:\Users\you\AppData\Local\Programs\Python\Python313-arm64\python.exe
+ [3] zig      D:\llm\zig-aarch64-windows-0.17.0\zig.exe
+ [4] cuda     C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4
+ [5] vcvars   C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat
+ [6] model    D:\llm\model\Qwen3.8-Flash-Next-FP4-Local
+```
+
+The engine and recipe folders are derived from `root` (`<root>\TensorFold`, `<root>\Qwen3.8-Flash-Next-…`)
+because the recipe's own `config.ps1` looks for its sibling that way; only `root` is a choice.
+
+### Two halves, two repositories
+
+| | what is touched | scripts |
+|---|---|---|
+| **engine** | TensorFold: 3 patches applied, then built | `scripts\engine\` |
+| **recipe** | MiaAI-Lab's clone: four `.ps1` added, `.env` gets `MODEL_PATH` — no line of their code changes | `scripts\recipe\` |
+
+`recipe\1-install-ps1.ps1` checks that claim itself: at the end it runs `git -C <recipe> status --porcelain`
+and expects new files only, no modifications.
 
 Both clones are **pinned**, not followed: the engine to `v1.1.4` and the recipe to the commit patch `0001` was
 cut from (see [`VERSIONS.md`](VERSIONS.md)). `2-clone.ps1` warns if the recipe's `main` has moved past that
 point; pass `-RecipeRef ''` only if you intend to follow it.
 
-Serving. The recipe clone carries the `.sh` files; copy the PowerShell ones in beside them:
+Serving. The recipe clone carries the `.sh` files; the installer puts the PowerShell ones beside them:
 
 ```powershell
-$Q = 'D:\llm\latest\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold'
-Copy-Item .\recipe\start.ps1, .\recipe\stop.ps1            $Q
-Copy-Item .\recipe\config.ps1, .\recipe\banner.ps1  "$Q\scripts"
+.\scripts\recipe\1-install-ps1.ps1      # start.ps1, stop.ps1, scripts\config.ps1, scripts\banner.ps1
 
+# no path is typed by hand: read back what the menu accepted
+$root = (Get-Content .migration.local.json -Raw | ConvertFrom-Json).root
+$Q    = Join-Path $root 'Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold'
 # 30.5 GB of host memory on this class of machine: 5 streams need 23.74 GiB of KV and the
 # admission budget is 22.81 GiB, so 4 is what fits. Failed only after all 48 layers loaded.
 Add-Content "$Q\.env" @('TENSORFOLD_LOAD_STATS=1', 'PARALLEL=4')
@@ -82,6 +125,27 @@ Add-Content "$Q\.env" @('TENSORFOLD_LOAD_STATS=1', 'PARALLEL=4')
 & "$Q\start.ps1"    # [start.ps1] server answered after 71s
 & "$Q\stop.ps1"
 ```
+
+### Python and torch
+
+`engine\4-venv.ps1` builds the venv **inside the recipe folder** (`<recipe>\venv`), because that is where
+`start.ps1` looks for `Scripts\python.exe`. It installs, in this order:
+
+```powershell
+# 1. torch from NVIDIA's out-of-tree nightly index -- the recipe's own platform gets these
+#    from the nvcr.io/nvidia/pytorch base image, which does not exist on Windows
+python -m pip install --pre --upgrade --only-binary=:all: `
+  --extra-index-url https://pypi.nvidia.com/nvtorch_oot_nightly torch torchvision torchaudio
+
+# 2. the vision package; v1.1.4's setup.py refuses to install as a Python package, so v0.6.6
+python -m pip install "tensorfold[vision] @ git+https://github.com/ashhart/TensorFold.git@v0.6.6"
+
+# 3. the probe start.ps1 runs before it enables vision
+python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('tensorfold.vision.native_helper') else 1)"
+```
+
+Order matters: installing `tensorfold[vision]` first would pull a plain PyPI torch in as a dependency. Skip the
+whole step for text-only serving (`VISION=0`); add `-SkipTorch` if you already have a torch build you trust.
 
 ### Weights
 
@@ -126,6 +190,9 @@ climbs past a few percent, raise `TENSORFOLD_LOAD_GROUP` before touching anythin
 
 Windows 11 ARM64 · GB10 (128 GB unified, 20 cores) · CUDA 13.4 · Zig 0.17.0 (aarch64-windows) ·
 MSVC 2022 Build Tools with the ARM64 host · PowerShell 5.1 · Python 3.13 arm64 for `--vision` only.
+
+No path is fixed: `scripts\migration.config.ps1` finds these, and `.migration.local.json` remembers what you
+accepted. `1-preflight.ps1` hard-fails on zig ≠ 0.17.0 and warns when nvcc is not 13.4.
 
 ## License
 

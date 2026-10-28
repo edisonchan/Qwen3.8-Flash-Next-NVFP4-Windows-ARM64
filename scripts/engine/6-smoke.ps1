@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 <#
-  Step 6/6 -- smoke tests. None of them loads a checkpoint: no model, no GPU memory, no port.
+  Engine 6/6 -- smoke tests. None of them loads a checkpoint: no model, no GPU memory, no port.
 
     1. tensorfold-native --help                 the binary starts and prints its usage
     2. tensorfold-native capabilities --json    the build carries the expected version and backend
@@ -8,12 +8,18 @@
 
   A failing check here means the build is wrong; a passing one does not mean a checkpoint will
   load (that is start.ps1's job, and it needs the model on disk).
+
+  The engine tree comes from scripts\migration.config.ps1; an explicit -TensorFold wins.
 #>
 param(
-    [string]$TensorFold = 'D://llm//latest//TensorFold',
+    [string]$TensorFold = '',
     [string]$Expect     = '1.1.4',
     [string]$ExpectChip = 'nvidia-sm121'
 )
+
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'migration.config.ps1')
+$cfg = Get-MigConfig -Quiet
+if (-not $TensorFold) { $TensorFold = $cfg.EngineDir }
 
 # tf-cuda-test prints its result on stderr: under 'Stop' PowerShell 5.1 would abort the script with a
 # NativeCommandError. Stay on 'Continue' and judge by the text and $LASTEXITCODE.
@@ -32,12 +38,14 @@ if (-not (Test-Path $test)) { Bad "missing $test"; exit 1 }
 
 # 1. usage -----------------------------------------------------------------
 # --help exits 0 or 2 depending on the subcommand table; what matters is that it printed usage.
-$help = (& $exe --help 2>&1 | Out-String)
+$run = Invoke-MigNative -FilePath $exe -Arguments @('--help')
+$help = $run.Out + $run.Err
 if ($help -match 'usage: tensorfold-native') { Ok '--help prints the usage line' }
 else { Bad "--help did not print a usage line: $($help.Substring(0, [Math]::Min(120, $help.Length)))" }
 
 # 2. capabilities ----------------------------------------------------------
-$caps = (& $exe capabilities --json 2>&1 | Out-String)
+$run = Invoke-MigNative -FilePath $exe -Arguments @('capabilities', '--json')
+$caps = $run.Out + $run.Err
 if ($caps -match '"version":\s*"([^"]+)"') {
     $v = $Matches[1]
     if ($v -eq $Expect) { Ok "capabilities: version $v" } else { Bad "capabilities: version $v, expected $Expect" }
@@ -52,9 +60,10 @@ if ($caps -match '"backends":\s*\[([^\]]*)\]') {
 }
 
 # 3. device and kernels ----------------------------------------------------
-# tf-cuda-test writes its result line to stderr, so PowerShell shows it as a NativeCommandError;
-# that is cosmetic. Read both streams and look for the fields.
-$info = (& $test info 2>&1 | Out-String)
+# tf-cuda-test prints its result line on stderr; Invoke-MigNative reads both streams as raw text
+# (PowerShell's own 2>&1 would wrap the line at the host width and add NativeCommandError noise).
+$run = Invoke-MigNative -FilePath $test -Arguments @('info')
+$info = $run.Out + "`n" + $run.Err
 if ($info -match 'RESULT\s+(.*)') {
     $line = $Matches[1].Trim()
     Write-Host "  device: $line" -ForegroundColor DarkGray

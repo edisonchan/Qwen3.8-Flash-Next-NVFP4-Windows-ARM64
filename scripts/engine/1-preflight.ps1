@@ -1,21 +1,33 @@
 #Requires -Version 5.1
 <#
-  Step 1/6 -- environment preflight for the TensorFold v1.1.4 Windows ARM64 build.
+  Engine 1/6 -- environment preflight for the TensorFold v1.1.4 Windows ARM64 build.
 
   Verifies every prerequisite the build needs before anything is cloned, so a missing
   component fails in seconds instead of after a six-minute nvcc run.
 
+  No path is baked in: they come from scripts\migration.config.ps1 (saved answers, else detection).
+  A parameter you pass explicitly still wins.
+
   Usage:
-    powershell -ExecutionPolicy Bypass -File scripts\1-preflight.ps1
-    powershell -ExecutionPolicy Bypass -File scripts\1-preflight.ps1 -Zig "E:\tools\zig.exe" -Root "E:\ai"
+    powershell -ExecutionPolicy Bypass -File scripts\engine\1-preflight.ps1
+    powershell -ExecutionPolicy Bypass -File scripts\engine\1-preflight.ps1 -Zig "E:\tools\zig.exe" -Root "E:\ai"
 #>
 param(
-    [string]$Zig    = 'D:\llm\zig-aarch64-windows-0.17.0\zig.exe',
-    [string]$Cuda   = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4',
-    [string]$Vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat',
-    [string]$Root   = 'D:\llm\latest',
+    [string]$Zig    = '',
+    [string]$Cuda   = '',
+    [string]$Vcvars = '',
+    [string]$Root   = '',
+    [string]$Python = '',
     [double]$MinFreeGiB = 25
 )
+
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'migration.config.ps1')
+$cfg = Get-MigConfig -Quiet
+if (-not $Zig)    { $Zig    = $cfg.Zig }
+if (-not $Cuda)   { $Cuda   = $cfg.Cuda }
+if (-not $Vcvars) { $Vcvars = $cfg.Vcvars }
+if (-not $Root)   { $Root   = $cfg.Root }
+if (-not $Python) { $Python = $cfg.Python }
 
 # Native tools (git, nvcc, nvidia-smi) write ordinary progress to stderr, and under 'Stop' PowerShell 5.1
 # turns such a line into a terminating NativeCommandError. Stay on 'Continue' and check $LASTEXITCODE.
@@ -33,13 +45,32 @@ function Bad  { param([string]$Msg, [string]$Hint)
 
 Write-Host ''
 Write-Host 'TensorFold v1.1.4 - Windows ARM64 preflight' -ForegroundColor Magenta
+Write-Host "  settings from: $($cfg.Source)  ($(Get-MigConfigPath))" -ForegroundColor DarkGray
+Write-Host "  root:    $Root"
+Write-Host "  python:  $Python"
+Write-Host "  zig:     $Zig"
+Write-Host "  cuda:    $Cuda"
+Write-Host "  vcvars:  $Vcvars"
 Write-Host ''
 
 # ---- 1. OS / architecture -------------------------------------------------
-# PROCESSOR_ARCHITECTURE is unreliable under a WOW64 shell; ask the runtime.
-$arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-if ($arch -eq 'Arm64') { Ok "OS architecture: $arch" }
-else { Bad "OS architecture is $arch, not Arm64" 'This recipe builds aarch64-windows binaries; an x64 host must cross-compile differently.' }
+# Under an emulated x64 shell RuntimeInformation reports the *process* view (X64), and
+# Win32_OperatingSystem.OSArchitecture is a localized string ("ARM 64 位处理器"), so read the
+# numeric processor architecture instead: 12 = ARM64, 9 = x64.
+$cpuCode = $null
+try { $cpuCode = [int](Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1).Architecture } catch { }
+if ($null -ne $cpuCode) {
+    $archName = 'code ' + $cpuCode
+    if ($cpuCode -eq 12) { $archName = 'ARM64' }
+    elseif ($cpuCode -eq 9) { $archName = 'x64' }
+    elseif ($cpuCode -eq 0) { $archName = 'x86' }
+    if ($cpuCode -eq 12) { Ok "OS architecture: $archName" }
+    else { Bad "OS architecture is $archName, not ARM64" 'This recipe builds aarch64-windows binaries; an x64 host must cross-compile differently.' }
+} else {
+    $arch = [string][System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    if ($arch -eq 'Arm64') { Ok "OS architecture: $arch (reported by .NET)" }
+    else { Bad "OS architecture is $arch, not Arm64" 'This recipe builds aarch64-windows binaries; an x64 host must cross-compile differently.' }
+}
 
 # ---- 2. zig ---------------------------------------------------------------
 if (-not (Test-Path $Zig)) {
@@ -84,35 +115,35 @@ $git = Get-Command git -ErrorAction SilentlyContinue
 if ($git) { Ok "git: $((& git --version 2>&1 | Out-String).Trim())" }
 else { Bad 'git not on PATH' 'Install Git for Windows; both repositories are cloned with it.' }
 
-# ---- 6. python (only the vision helper needs it) -------------------------
-$py = Get-Command python -ErrorAction SilentlyContinue
-if ($py) {
-    $pv = (& python -c "import sys;print('%d.%d.%d' % sys.version_info[:3])" 2>&1 | Out-String).Trim()
-    if ($pv -match '^3\.(\d+)\.') {
-        $minor = [int]$Matches[1]
-        if ($minor -ge 11) { Ok "python: $pv" }
-        else { Warn2 "python is $pv (vision needs 3.11 or newer)" }
-    } else { Warn2 "could not read the python version ('$pv')" }
-} else {
-    Warn2 'python not on PATH: fine for text-only serving (VISION=0), required for --vision'
-}
+# ---- 6. python (the vision helper's venv is built from this interpreter) --
+$pyTest = Test-MigPython $Python
+if ($pyTest.State -eq 'ok')      { Ok $pyTest.Text }
+elseif ($pyTest.State -eq 'bad') { Warn2 ($pyTest.Text + ' -- text-only serving works with VISION=0') }
+else                             { Warn2 ('python: ' + $pyTest.Text + ' -- needed only for --vision, skip engine\4-venv.ps1 with VISION=0') }
 
 # ---- 7. GPU --------------------------------------------------------------
 $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($smi) {
-    $name = (& nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>&1 | Out-String).Trim()
-    Ok "GPU: $name"
+    # GB10 boxes answer with more than one row here (the NPU shows up as a device too, memory [N/A]),
+    # so keep the first row that actually reports a memory size.
+    $run = Invoke-MigNative -FilePath $smi.Source -Arguments @('--query-gpu=name,memory.total', '--format=csv,noheader')
+    $rows = @(($run.Out -split "`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '\[N/A\]' })
+    if ($rows.Count -gt 0) { Ok "GPU: $($rows[0])" }
+    else { Warn2 "nvidia-smi gave no GPU row (exit $($run.Code)); the engine needs a CUDA device to serve" }
 } else {
     Warn2 'nvidia-smi not on PATH: the build still works, but the engine needs a CUDA device to serve'
 }
 
 # ---- 8. disk -------------------------------------------------------------
-$drive = (Resolve-Path (Split-Path -Qualifier $Root) -ErrorAction SilentlyContinue)
-if (-not $drive) { $drive = "$((Split-Path -Qualifier $Root))\" }
+$qual = Split-Path -Qualifier $Root                      # 'D:'
+$driveName = $qual.TrimEnd(':')                          # 'D'
 try {
-    $free = (Get-PSDrive -Name ((Split-Path -Qualifier $Root).TrimEnd(':'))).Free / 1GB
-    if ($free -ge $MinFreeGiB) { Ok ('free space on {0}: {1:N1} GiB' -f (Split-Path -Qualifier $Root), $free) }
-    else { Bad ('only {0:N1} GiB free on {1}' -f $free, (Split-Path -Qualifier $Root)) "The sources plus zig caches want ~{0:N0} GiB; the checkpoint is separate (~96 GiB)." -f $MinFreeGiB }
+    $free = (Get-PSDrive -Name $driveName).Free / 1GB
+    if ($free -ge $MinFreeGiB) { Ok ('free space on {0} {1:N1} GiB' -f $qual, $free) }
+    else {
+        $hint = 'The sources plus zig caches want ~{0:N0} GiB; the checkpoint is separate (~96 GiB).' -f $MinFreeGiB
+        Bad ('only {0:N1} GiB free on {1}' -f $free, $qual) $hint
+    }
 } catch { Warn2 'could not read free disk space' }
 
 # ---- summary -------------------------------------------------------------
