@@ -11,12 +11,14 @@ It contains no model weights and no compiled binaries.
 1. This repository's own work -- MIT
 ------------------------------------
 
-  README.md, README.zh-CN.md, NOTICE, CREDITS.md
+  README.md, README.zh-CN.md, NOTICE, LICENSE
+  .gitignore, .gitattributes
   docs/, references/, scripts/, SKILL.md
   patches/0002-windows-arm64-port.patch
   patches/0003-load-pipeline.patch
 
   Copyright (c) 2026 edison. MIT License, full text in LICENSE.
+  CREDITS.md is not listed here: it is MiaAI-Lab's file, see section 2.
 
 
 2. The recipe this repository ports -- MiaAI-Lab, MIT
@@ -31,8 +33,9 @@ It contains no model weights and no compiled binaries.
   patches 0001..0017, merged into a single diff against TensorFold v1.1.4
   (commit eab85828). The changes in those patches are MiaAI-Lab's work, listed
   one by one in CREDITS.md, and stay under their MIT License. The merge was done
-  only to make them apply to the pinned release as one step; no change of
-  substance was made while merging.
+  only to make them apply to the pinned release in one step, and adds nothing of
+  its own: where the seventeen overlap, the result is conflict resolution against
+  eab85828, not a change of behaviour.
 
   recipe/start.ps1, recipe/stop.ps1, recipe/config.ps1 and recipe/banner.ps1 are
   the PowerShell counterparts of that repository's start.sh, stop.sh,
@@ -55,6 +58,11 @@ It contains no model weights and no compiled binaries.
   TensorFold's NOTICE, kept as Apache-2.0 s4(d) requires:
                                                LICENSES/TensorFold-NOTICE.txt
   TensorFold's third-party notices:            LICENSES/TensorFold-THIRD_PARTY_NOTICES.md
+
+  Those four files are reproduced unedited, but under LICENSES/ with a TensorFold-
+  prefix, so path references inside them (for example "LICENSES/MIT.txt") point at
+  TensorFold's own tree rather than this one. The texts themselves are what the
+  licenses require; nothing is renamed in content.
 
   Statement of changes, Apache-2.0 s4(b). The patches below modify TensorFold's
   source and quote it as diff context. They were made by edison in October 2026,
@@ -121,6 +129,6 @@ It contains no model weights and no compiled binaries.
   patches/0003-load-pipeline.patch                edison, 4 loader files on TensorFold
   recipe/*.ps1                                    MiaAI-Lab (.sh) + edison (.ps1)
   scripts/*.ps1, references/*.md, docs/, SKILL.md edison
-  CREDITS.md                                      MiaAI-Lab, reproduced unedited
+  CREDITS.md                                      MiaAI-Lab, reproduced with a provenance note at the top
 
   See CREDITS.md for everyone this port builds on.
