@@ -1,0 +1,41 @@
+# Build outputs, weights and local state: a binary built with these patches is a
+# TensorFold binary under TensorFold's licenses, and this repo ships diffs only.
+build/
+bin/
+*.exe
+*.dll
+*.lib
+*.so
+*.dylib
+*.cubin
+*.ptx
+*.o
+*.obj
+*.pdb
+*.ilk
+*.zip
+*.tar.gz
+
+# Model weights (96 GiB of NVFP4 checkpoint; never commit)
+model/
+models/
+*.safetensors
+*.gguf
+
+# Python
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+
+# Local configuration and run state (.env carries model paths and ports)
+.env
+logs/
+*.log
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

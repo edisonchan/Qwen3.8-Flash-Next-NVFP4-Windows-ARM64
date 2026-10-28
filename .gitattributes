@@ -1,0 +1,8 @@
+# The patches under patches/ are git diffs against TensorFold v1.1.4. They must keep LF
+# line endings or `git apply` rejects them on a clone where core.autocrlf=true.
+* text=auto eol=lf
+*.patch text eol=lf
+*.ps1   text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+LICENSE NOTICE text eol=lf

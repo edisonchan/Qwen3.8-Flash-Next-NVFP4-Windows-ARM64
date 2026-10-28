@@ -1,0 +1,158 @@
+--- a/zig/kernels/cuda/qmm_prefill.cu
++++ b/zig/kernels/cuda/qmm_prefill.cu
+@@ -149,9 +149,9 @@
+ 
+ // The instantiation prefill_matmul launches (tile 0: 128x128 on 2x4 warps, 3 stages), bf16 out.
+ template __global__ void tf_qmm_prefill::prefill_kernel<64, 128, 128, 2, 4, 3, false>(
+-    const __nv_bfloat16*, const uint32_t*, const __nv_bfloat16*, const __nv_bfloat16*, void*, int, int, int,
++    const __nv_bfloat16* __restrict__, const uint32_t* __restrict__, const __nv_bfloat16* __restrict__, const __nv_bfloat16* __restrict__, void* __restrict__, int, int, int,
+     int, int, int);
+ // The same tile on 2x2 warps, two stages (Tile<64, 128, 128, 2, 2, 2>): Qwen3.5's prompt chunks on an RTX 5090.
+ template __global__ void tf_qmm_prefill::prefill_kernel<64, 128, 128, 2, 2, 2, false>(
+-    const __nv_bfloat16*, const uint32_t*, const __nv_bfloat16*, const __nv_bfloat16*, void*, int, int, int,
++    const __nv_bfloat16* __restrict__, const uint32_t* __restrict__, const __nv_bfloat16* __restrict__, const __nv_bfloat16* __restrict__, void* __restrict__, int, int, int,
+     int, int, int);
+--- a/zig/kernels/cuda/prefill_attention.cu
++++ b/zig/kernels/cuda/prefill_attention.cu
+@@ -303,7 +303,7 @@
+ template __global__ void tf_prefill_attention::vision_kernel<80, 8>(const __nv_bfloat16* __restrict__, __nv_bfloat16* __restrict__, int, int,
+     float);
+ // Head dim 256, eight warps, two query heads a block, two staging slots (Qwen3.8-27B's prompt chunks, bf16 and fp8).
+-template __global__ void tf_prefill_attention::hpattn_kernel<256, 8, 2, 2>(const __nv_bfloat16*, const __nv_bfloat16*,
+-    const __nv_bfloat16*, __nv_bfloat16*, int, int, int, int, int, float, int);
+-template __global__ void tf_prefill_attention::hpattn8_kernel<256, 8, 2, 2>(const __nv_bfloat16*, const uint8_t*,
+-    const uint8_t*, const float*, const float*, __nv_bfloat16*, int, int, int, int, int, float, int);
++template __global__ void tf_prefill_attention::hpattn_kernel<256, 8, 2, 2>(const __nv_bfloat16* __restrict__, const __nv_bfloat16* __restrict__,
++    const __nv_bfloat16* __restrict__, __nv_bfloat16* __restrict__, int, int, int, int, int, float, int);
++template __global__ void tf_prefill_attention::hpattn8_kernel<256, 8, 2, 2>(const __nv_bfloat16* __restrict__, const uint8_t* __restrict__,
++    const uint8_t* __restrict__, const float* __restrict__, const float* __restrict__, __nv_bfloat16* __restrict__, int, int, int, int, int, float, int);
+--- a/zig/kernels/cuda/gdn_prefill.cu
++++ b/zig/kernels/cuda/gdn_prefill.cu
+@@ -145,6 +145,6 @@
+ } // namespace tf_gdn_prefill
+ 
+ // Qwen3.5's prompt chunks: bf16 keys and strengths, 64 value rows a block (48 heads take 96 blocks).
+-template __global__ void tf_gdn_prefill::chain_kernel<__nv_bfloat16, __nv_bfloat16, 64, 32>(const __nv_bfloat16*,
+-    const __nv_bfloat16*, const __nv_bfloat16*, const float*, const __nv_bfloat16*, const float* state, float* last, __nv_bfloat16*,
++template __global__ void tf_gdn_prefill::chain_kernel<__nv_bfloat16, __nv_bfloat16, 64, 32>(const __nv_bfloat16* __restrict__,
++    const __nv_bfloat16* __restrict__, const __nv_bfloat16* __restrict__, const float* __restrict__, const __nv_bfloat16* __restrict__, const float* state, float* last, __nv_bfloat16* __restrict__,
+     int, int, int);
+--- a/zig/src/families/flashnext/cuda_ple_reader.zig
++++ b/zig/src/families/flashnext/cuda_ple_reader.zig
+@@ -8,6 +8,7 @@
+ //! one, a prompt chunk's rows while the chunk before it runs. The bytes are the file's, so the dequantized rows are the
+ //! mapped path's bits.
+ const std = @import("std");
++const builtin = @import("builtin");
+ const core = @import("core");
+ const direct_io = core.direct_io;
+ 
+@@ -87,7 +88,13 @@
+         const own_starts = try gpa.dupe(i64, starts);
+         errdefer gpa.free(own_starts);
+         // anonymous memory, zero until a slot is written: only the slots in use are resident
+-        const mem = try std.posix.mmap(null, slot_count * @sizeOf(Slot), .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
++        const slot_bytes = slot_count * @sizeOf(Slot);
++        // Windows' posix shim has no anonymous mmap (MAP is void there); the page allocator is the same
++        // anonymous, zeroed, demand-committed memory (VirtualAlloc), so the cache reads as it does on Linux.
++        const mem: []align(std.heap.page_size_min) u8 = if (builtin.os.tag == .windows)
++            try std.heap.page_allocator.alignedAlloc(u8, .fromByteUnits(std.heap.page_size_min), slot_bytes)
++        else
++            try std.posix.mmap(null, slot_bytes, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
+         r.* = .{
+             .gpa = gpa,
+             .io = io,
+@@ -111,7 +118,12 @@
+         for (r.threads[0..r.spawned]) |th| th.join();
+         for (&r.batches) |*b| if (!b.done) r.gpa.free(b.ids);
+         for (r.files) |*f| f.close();
+-        std.posix.munmap(@as([*]align(std.heap.page_size_min) u8, @ptrCast(@alignCast(r.slots.ptr)))[0 .. r.slots.len * @sizeOf(Slot)]);
++        const slots_mem = @as([*]align(std.heap.page_size_min) u8, @ptrCast(@alignCast(r.slots.ptr)))[0 .. r.slots.len * @sizeOf(Slot)];
++        if (builtin.os.tag == .windows) {
++            std.heap.page_allocator.free(slots_mem);
++        } else {
++            std.posix.munmap(slots_mem);
++        }
+         r.gpa.free(r.files);
+         r.gpa.free(r.shards);
+         r.gpa.free(r.starts);
+--- a/zig/src/families/flashnext/cuda_ple.zig
++++ b/zig/src/families/flashnext/cuda_ple.zig
+@@ -337,6 +337,7 @@
+ /// The n-gram table held open for an engine's life: the hash, the scale, and each shard's slices of its mapped file.
+ pub const Ngram = struct {
+     gpa: std.mem.Allocator,
++    io: std.Io,
+     hash: Hash,
+     scale: f32,
+     files: std.ArrayList(Open) = .empty,
+@@ -351,7 +352,7 @@
+ 
+     pub fn init(gpa: std.mem.Allocator, io: std.Io, model_dir: []const u8) !Ngram {
+         const cfg = try readSpec(gpa, io, model_dir);
+-        var g: Ngram = .{ .gpa = gpa, .hash = try Hash.init(.{
++        var g: Ngram = .{ .gpa = gpa, .io = io, .hash = try Hash.init(.{
+             .vocab = cfg.vocab,
+             .ngram = cfg.ngram,
+             .per = cfg.per,
+@@ -547,10 +548,10 @@
+         fn part(ctx: *const anyopaque, i: usize) anyerror!void {
+             const s: *const Split = @ptrCast(@alignCast(ctx));
+             const lo = @min(s.ids.len, i * s.per);
+-            const t0 = if (Stat.on) Stat.now() else 0;
++            const t0 = if (Stat.on) Stat.now(s.g.io) else 0;
+             try s.g.fill(s.ids, s.out, lo, @min(s.ids.len, lo + s.per));
+             if (Stat.on) {
+-                const d = Stat.now() - t0;
++                const d = Stat.now(s.g.io) - t0;
+                 _ = Stat.part_sum.fetchAdd(d, .monotonic);
+                 var m = Stat.part_max.load(.monotonic);
+                 while (d > m) m = Stat.part_max.cmpxchgWeak(m, d, .monotonic, .monotonic) orelse break;
+@@ -649,10 +650,10 @@
+     var part_max = std.atomic.Value(u64).init(0);
+     var max_sum: u64 = 0;
+     var run_sum_parts: u64 = 0;
+-    fn now() u64 {
+-        var t: std.c.timespec = undefined;
+-        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &t);
+-        return @as(u64, @intCast(t.sec)) * 1_000_000_000 + @as(u64, @intCast(t.nsec));
++    /// Monotonic nanoseconds. Windows has no `clock_gettime` (`std.c.CLOCK` is void there), so the report reads the io's
++    /// clock, which std backs with QPC on Windows and CLOCK_MONOTONIC elsewhere.
++    fn now(io: std.Io) u64 {
++        return @intCast(std.Io.Clock.awake.now(io).toNanoseconds());
+     }
+ };
+ 
+@@ -673,7 +674,7 @@
+     const ids = try g.gpa.alloc(i64, items);
+     defer g.gpa.free(ids);
+     Stat.on = @import("cuda_knobs.zig").gatherLog();
+-    const ts0 = if (Stat.on) Stat.now() else 0;
++    const ts0 = if (Stat.on) Stat.now(g.io) else 0;
+     var hists: [64][max_n]i64 = undefined;
+     if (parts.len > hists.len) return error.UnexpectedTensor;
+     var at: usize = 0;
+@@ -693,7 +694,7 @@
+     out.len = total * w;
+     for (parts[1..], 0..) |q, k| if (q.out.ptr != parts[k].out.ptr + parts[k].out.len) return error.UnexpectedTensor;
+     const n_threads = @min(ple_pool.max_parts, items / 4);
+-    const ts1 = if (Stat.on) Stat.now() else 0;
++    const ts1 = if (Stat.on) Stat.now(g.io) else 0;
+     if (Stat.on) {
+         Stat.part_sum.store(0, .monotonic);
+         Stat.part_max.store(0, .monotonic);
+@@ -704,12 +705,12 @@
+         const split: Ngram.Split = .{ .g = g, .ids = ids, .out = out, .per = (items + n_threads - 1) / n_threads };
+         try g.pool.?.run(n_threads, .{ .ctx = &split, .run = Ngram.Split.part });
+     }
+-    const ts2 = if (Stat.on) Stat.now() else 0;
++    const ts2 = if (Stat.on) Stat.now(g.io) else 0;
+     defer if (Stat.on) {
+         Stat.calls += 1;
+         Stat.prep_ns += ts1 - ts0;
+         Stat.run_ns += ts2 - ts1;
+-        Stat.post_ns += Stat.now() - ts2;
++        Stat.post_ns += Stat.now(g.io) - ts2;
+         Stat.parts_n += n_threads;
+         Stat.items_n += items;
+         Stat.max_sum += Stat.part_max.load(.monotonic);

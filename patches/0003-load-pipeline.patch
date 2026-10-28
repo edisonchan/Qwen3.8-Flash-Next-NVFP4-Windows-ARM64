@@ -1,0 +1,441 @@
+diff --git a/zig/src/core/nvfp4_slice.zig b/zig/src/core/nvfp4_slice.zig
+index c76e3ed7..0109054e 100644
+--- a/zig/src/core/nvfp4_slice.zig
++++ b/zig/src/core/nvfp4_slice.zig
+@@ -60,12 +60,19 @@ pub fn slice(gpa: std.mem.Allocator, source: Source, rows: Span, inputs: Span) !
+     errdefer gpa.free(codes);
+     const scales = try gpa.alloc(u8, n * (k / 16));
+     errdefer gpa.free(scales);
+-    for (0..n) |row| {
++    // Whole rows, every input: the rectangle is the tensor, one copy instead of one per row
++    // (a loader reads thousands of these, and the row loop cost a third of the read).
++    const whole = inputs.from == 0 and inputs.to == d.k;
++    if (whole) {
++        @memcpy(codes[0 .. n * (d.k / 2)], source.weight.bytes[rows.from * (d.k / 2) ..][0 .. n * (d.k / 2)]);
++    } else for (0..n) |row| {
+         const begin = (rows.from + row) * (d.k / 2) + inputs.from / 2;
+         @memcpy(codes[row * (k / 2) ..][0 .. k / 2], source.weight.bytes[begin..][0 .. k / 2]);
+     }
+     switch (source.scales) {
+-        .plain => |s| for (0..n) |row| {
++        .plain => |s| if (whole) {
++            @memcpy(scales[0 .. n * (d.k / 16)], s.bytes[rows.from * (d.k / 16) ..][0 .. n * (d.k / 16)]);
++        } else for (0..n) |row| {
+             const begin = (rows.from + row) * (d.k / 16) + inputs.from / 16;
+             @memcpy(scales[row * (k / 16) ..][0 .. k / 16], s.bytes[begin..][0 .. k / 16]);
+         },
+diff --git a/zig/src/families/flashnext/cuda_modelopt_experts.zig b/zig/src/families/flashnext/cuda_modelopt_experts.zig
+index 40a3b6a3..de3fb516 100644
+--- a/zig/src/families/flashnext/cuda_modelopt_experts.zig
++++ b/zig/src/families/flashnext/cuda_modelopt_experts.zig
+@@ -63,6 +63,200 @@ pub fn load(a: std.mem.Allocator, d: *cuda.Driver, store: *wt.Store, prefix: []c
+     return loadShape(a, d, store, prefix, world, rank, wt.dims, wt.moe_w, wt.experts_n);
+ }
+ 
++/// Host threads packing one group of experts while the copy engine lands the group before it.
++const max_threads: usize = 32;
++/// Experts in one stage: the unit read, packed and copied as a batch.
++const stage_default: usize = 16;
++
++const Stage = struct {
++    up: cuda.HostBuffer,
++    down: cuda.HostBuffer,
++    done: cuda.Event,
++    pending: bool = false,
++
++    fn init(d: *const cuda.Driver, experts: usize, up_bytes: usize, down_bytes: usize) !Stage {
++        var up = try cuda.HostBuffer.alloc(d, experts * up_bytes);
++        errdefer up.free();
++        var down = try cuda.HostBuffer.alloc(d, experts * down_bytes);
++        errdefer down.free();
++        var done = try cuda.Event.init(d, false);
++        errdefer done.deinit();
++        return .{ .up = up, .down = down, .done = done };
++    }
++
++    /// A stage is rewritten only once its previous copies have landed.
++    fn reuse(self: *Stage) !void {
++        if (!self.pending) return;
++        try self.done.synchronize();
++        self.pending = false;
++    }
++
++    fn free(self: *Stage) void {
++        self.up.free();
++        self.down.free();
++        self.done.deinit();
++    }
++};
++
++const Job = struct {
++    store: *wt.Store,
++    prefix: []const u8,
++    cut: Cut,
++    dims: usize,
++    full_width: usize,
++    /// The first expert of this group and how many the group holds.
++    first: usize,
++    count: usize,
++    up_bytes: usize,
++    down_bytes: usize,
++    up_stage: []u8,
++    down_stage: []u8,
++    up_globals: []f32,
++    down_globals: []f32,
++    next: std.atomic.Value(usize) = .init(0),
++    stop: std.atomic.Value(bool) = .init(false),
++
++    /// One expert's three projections read, packed into the stage's slot and its globals recorded.
++    fn pack(self: *Job, i: usize, a: std.mem.Allocator) !void {
++        try packExpert(a, self.store, self.prefix, self.first + i, self.cut, self.dims, self.full_width, self.up_stage[i * self.up_bytes ..][0..self.up_bytes], self.down_stage[i * self.down_bytes ..][0..self.down_bytes], self.up_globals[i * 2 ..][0..2], self.down_globals[i..][0..1]);
++    }
++};
++
++/// One expert's gate, up and down read and packed into the caller's slots, its three global scales recorded.
++fn packExpert(a: std.mem.Allocator, store: anytype, prefix: []const u8, e: usize, cut: Cut, dims: usize, full_width: usize, up_slot: []u8, down_slot: []u8, up_globals: []f32, down_globals: []f32) !void {
++    var buf: [512]u8 = undefined;
++    var gate = try readPart(a, store, try std.fmt.bufPrint(&buf, "{s}.experts.{d}.gate_proj", .{ prefix, e }), cut, false, dims, full_width);
++    defer gate.deinit(a);
++    var value = try readPart(a, store, try std.fmt.bufPrint(&buf, "{s}.experts.{d}.up_proj", .{ prefix, e }), cut, false, dims, full_width);
++    defer value.deinit(a);
++    var output = try readPart(a, store, try std.fmt.bufPrint(&buf, "{s}.experts.{d}.down_proj", .{ prefix, e }), cut, true, dims, full_width);
++    defer output.deinit(a);
++    const width = cut.width();
++    // the slots are pinned or allocator memory, so their words are 4-byte aligned where they land
++    const up_words: []align(4) u8 = @alignCast(up_slot);
++    const down_words: []align(4) u8 = @alignCast(down_slot);
++    ex.packGateUp(std.mem.bytesAsSlice(u32, up_words), .{ gate.codes, gate.scales }, .{ value.codes, value.scales }, width, dims);
++    ex.packOne(std.mem.bytesAsSlice(u32, down_words), output.codes, output.scales, dims, width);
++    up_globals[0] = gate.global;
++    up_globals[1] = value.global;
++    down_globals[0] = output.global;
++}
++
++/// Takes the next expert until the group is exhausted; the first failure stops the others.
++fn work(j: *Job, errs: []?anyerror, slot: usize) void {
++    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
++    defer arena.deinit();
++    while (!j.stop.load(.monotonic)) {
++        const i = j.next.fetchAdd(1, .monotonic);
++        if (i >= j.count) return;
++        j.pack(i, arena.allocator()) catch |e| {
++            errs[slot] = e;
++            j.stop.store(true, .monotonic);
++            return;
++        };
++        _ = arena.reset(.retain_capacity);
++    }
++}
++
++fn packGroup(j: *Job, threads: usize) !void {
++    const n = @max(1, @min(threads, j.count));
++    var errs: [max_threads]?anyerror = @splat(null);
++    var spawned: [max_threads]std.Thread = undefined;
++    var started: usize = 0;
++    for (1..n) |t| {
++        spawned[started] = std.Thread.spawn(.{}, work, .{ j, errs[0..n], t }) catch break;
++        started += 1;
++    }
++    work(j, errs[0..n], 0);
++    for (spawned[0..started]) |th| th.join();
++    for (errs[0..n]) |e| if (e) |err| return err;
++}
++
++fn enqueue(d: *const cuda.Driver, dst: u64, src: []const u8, stream: cuda.abi.Stream) !void {
++    if (src.len == 0) return;
++    try d.check(d.api.cuMemcpyHtoDAsync_v2(dst, @ptrCast(@constCast(src.ptr)), src.len, stream), "cuMemcpyHtoDAsync");
++}
++
++fn envNumber(name: [:0]const u8) ?usize {
++    const raw = std.c.getenv(name) orelse return null;
++    const text = std.mem.span(raw);
++    return std.fmt.parseInt(usize, text, 10) catch null;
++}
++
++pub fn loadStatsOn() bool {
++    return (envNumber("TENSORFOLD_LOAD_STATS") orelse 0) != 0;
++}
++
++fn now(io: std.Io) u64 {
++    return @intCast(std.Io.Clock.awake.now(io).toNanoseconds());
++}
++
++/// Read, pack and copy a layer's experts: `count` of them in groups of a few, packed by many host
++/// threads into pinned staging while the copy engine lands the group before it.
++fn fill(d: *const cuda.Driver, store: *wt.Store, prefix: []const u8, cut: Cut, dims: usize, full_width: usize, count: usize, up_bytes: usize, down_bytes: usize, up: cuda.DeviceBuffer, down: cuda.DeviceBuffer, up_globals: []f32, down_globals: []f32) !void {
++    const threads = @max(1, @min(envNumber("TENSORFOLD_LOAD_THREADS") orelse (std.Thread.getCpuCount() catch 4), max_threads));
++    const group = @min(@max(envNumber("TENSORFOLD_LOAD_GROUP") orelse stage_default, 1), count);
++    var copy = try cuda.Stream.init(d, true);
++    defer copy.deinit();
++    var stages = [2]Stage{ try Stage.init(d, group, up_bytes, down_bytes), undefined };
++    errdefer stages[0].free();
++    stages[1] = try Stage.init(d, group, up_bytes, down_bytes);
++    defer for (&stages) |*s| s.free();
++    const stats = loadStatsOn();
++    var packed_ns: u64 = 0;
++    var waited_ns: u64 = 0;
++    var first: usize = 0;
++    var g: usize = 0;
++    while (first < count) : (g += 1) {
++        const n = @min(group, count - first);
++        const st = &stages[g % 2];
++        const w0 = if (stats) now(store.io) else 0;
++        try st.reuse();
++        if (stats) waited_ns += now(store.io) - w0;
++        var job: Job = .{
++            .store = store,
++            .prefix = prefix,
++            .cut = cut,
++            .dims = dims,
++            .full_width = full_width,
++            .first = first,
++            .count = n,
++            .up_bytes = up_bytes,
++            .down_bytes = down_bytes,
++            .up_stage = st.up.bytes,
++            .down_stage = st.down.bytes,
++            .up_globals = up_globals[first * 2 ..][0 .. n * 2],
++            .down_globals = down_globals[first..][0..n],
++        };
++        const p0 = if (stats) now(store.io) else 0;
++        try packGroup(&job, threads);
++        if (stats) packed_ns += now(store.io) - p0;
++        try enqueue(d, up.ptr + first * up_bytes, st.up.bytes[0 .. n * up_bytes], copy.handle);
++        try enqueue(d, down.ptr + first * down_bytes, st.down.bytes[0 .. n * down_bytes], copy.handle);
++        try st.done.record(copy);
++        st.pending = true;
++        first += n;
++    }
++    try copy.synchronize();
++    if (stats) std.log.info("flashnext: {d} experts in {d} groups of {d} on {d} threads: pack {d} ms, stage wait {d} ms, {d} MiB", .{ count, g, group, threads, packed_ns / 1_000_000, waited_ns / 1_000_000, (up_bytes + down_bytes) * count >> 20 });
++}
++
++/// The serial form: one expert at a time, a pageable copy each, no staging. It is also the path
++/// for any reader that is not the engine's store (a test's in-memory source).
++fn serial(a: std.mem.Allocator, store: anytype, prefix: []const u8, cut: Cut, dims: usize, full_width: usize, count: usize, up_bytes: usize, down_bytes: usize, up: cuda.DeviceBuffer, down: cuda.DeviceBuffer, up_globals: []f32, down_globals: []f32) !void {
++    const up_words = try a.alloc(u32, up_bytes / 4);
++    defer a.free(up_words);
++    const down_words = try a.alloc(u32, down_bytes / 4);
++    defer a.free(down_words);
++    const up_stage = std.mem.sliceAsBytes(up_words);
++    const down_stage = std.mem.sliceAsBytes(down_words);
++    for (0..count) |i| {
++        try packExpert(a, store, prefix, i, cut, dims, full_width, up_stage, down_stage, up_globals[i * 2 ..][0..2], down_globals[i..][0..1]);
++        try up.upload(i * up_bytes, up_stage);
++        try down.upload(i * down_bytes, down_stage);
++    }
++}
++
+ pub fn loadShape(a: std.mem.Allocator, d: *const cuda.Driver, store: anytype, prefix: []const u8, world: usize, rank: usize, dims: usize, full_width: usize, count: usize) !Owned {
+     const cut = try Cut.init(full_width, world, rank);
+     if (dims == 0 or dims % 32 != 0 or count == 0) return error.UnexpectedTensor;
+@@ -80,32 +274,23 @@ pub fn loadShape(a: std.mem.Allocator, d: *const cuda.Driver, store: anytype, pr
+     defer a.free(up_globals);
+     const down_globals = try a.alloc(f32, count);
+     defer a.free(down_globals);
+-    const packed_up = try a.alloc(u32, up_bytes / 4);
+-    defer a.free(packed_up);
+-    const packed_down = try a.alloc(u32, down_bytes / 4);
+-    defer a.free(packed_down);
+-    var buf: [512]u8 = undefined;
+-    for (0..count) |i| {
+-        var gate = try readPart(a, store, try std.fmt.bufPrint(&buf, "{s}.experts.{d}.gate_proj", .{ prefix, i }), cut, false, dims, full_width);
+-        defer gate.deinit(a);
+-        var value = try readPart(a, store, try std.fmt.bufPrint(&buf, "{s}.experts.{d}.up_proj", .{ prefix, i }), cut, false, dims, full_width);
+-        defer value.deinit(a);
+-        ex.packGateUp(packed_up, .{ gate.codes, gate.scales }, .{ value.codes, value.scales }, width, dims);
+-        try up.upload(i * up_bytes, std.mem.sliceAsBytes(packed_up));
+-        up_globals[i * 2] = gate.global;
+-        up_globals[i * 2 + 1] = value.global;
+-        var output = try readPart(a, store, try std.fmt.bufPrint(&buf, "{s}.experts.{d}.down_proj", .{ prefix, i }), cut, true, dims, full_width);
+-        defer output.deinit(a);
+-        ex.packOne(packed_down, output.codes, output.scales, dims, width);
+-        try down.upload(i * down_bytes, std.mem.sliceAsBytes(packed_down));
+-        down_globals[i] = output.global;
+-    }
++    // Only the engine's own store has the shard cache and locking the staged fill reads through;
++    // any other reader (a test's in-memory source) takes the one-at-a-time form.
++    if (@TypeOf(store) == *wt.Store) {
++        if ((envNumber("TENSORFOLD_LOAD_SERIAL") orelse 0) == 0) {
++            fill(d, store, prefix, cut, dims, full_width, count, up_bytes, down_bytes, up, down, up_globals, down_globals) catch |e| {
++                std.log.warn("flashnext: staged expert fill stopped ({s}), falling back to one at a time", .{@errorName(e)});
++                try serial(a, store, prefix, cut, dims, full_width, count, up_bytes, down_bytes, up, down, up_globals, down_globals);
++            };
++        } else try serial(a, store, prefix, cut, dims, full_width, count, up_bytes, down_bytes, up, down, up_globals, down_globals);
++    } else try serial(a, store, prefix, cut, dims, full_width, count, up_bytes, down_bytes, up, down, up_globals, down_globals);
+     var us = try cuda.DeviceBuffer.fromHost(d, std.mem.sliceAsBytes(up_globals));
+     errdefer us.free();
+     const ds = try cuda.DeviceBuffer.fromHost(d, std.mem.sliceAsBytes(down_globals));
+     return .{ .up = up, .down = down, .up_scale = us, .down_scale = ds, .width = width, .dims = dims, .count = count };
+ }
+ 
++
+ test "intermediate-channel cuts cover the source once and preserve 32-input kernel groups" {
+     const a = try Cut.init(640, 2, 0);
+     const b = try Cut.init(640, 2, 1);
+diff --git a/zig/src/families/flashnext/cuda_prompt.zig b/zig/src/families/flashnext/cuda_prompt.zig
+index 10600a8c..11958eac 100644
+--- a/zig/src/families/flashnext/cuda_prompt.zig
++++ b/zig/src/families/flashnext/cuda_prompt.zig
+@@ -222,20 +222,24 @@ pub const Engine = struct {
+         const rows = try gpa.alloc(f32, 3 * fb.max_pocket * dims);
+         defer gpa.free(rows);
+         var learned: usize = 0;
++        const timed = @import("cuda_modelopt_experts.zig").loadStatsOn();
+         for (0..layers_n) |i| {
+             const cap = fb.max_pocket * dims;
+             var pk: load.Pocket = .{ .gate = rows[0..cap], .up = rows[cap..][0..cap], .down = rows[2 * cap ..][0..cap] };
++            const t0 = if (timed) @as(u64, @intCast(std.Io.Clock.awake.now(io).toNanoseconds())) else 0;
+             e.layers[i] = try load.loadLayerRank(gpa, driver, stream, &e.store, pack_fn, i, world, rank, &pk);
+             e.n_layers += 1;
++            const t1 = if (timed) @as(u64, @intCast(std.Io.Clock.awake.now(io).toNanoseconds())) else 0;
+             std.log.info("flashnext: rank {d}/{d} loaded layer {d}/{d}", .{ rank + 1, world, i + 1, layers_n });
++            if (timed) std.log.info("flashnext: layer {d} took {d} ms", .{ i, (t1 - t0) / 1_000_000 });
+             if (pk.n == 0) continue;
+             const used = pocket.usedOf(pk.up, pk.n);
+             try e.pockets.set(driver, stream, i, pk.gate[0 .. pk.n * dims], pk.up[0 .. pk.n * dims], pk.down[0 .. pk.n * dims], used);
+             learned += used;
+         }
+         if (learned > 0) std.log.info("flashnext: the folder's Living Weights pockets hold {d} learned neurons beside the shared experts", .{learned});
+-        e.store.release();
+-        e.store.closeFile();
++        // every layer is resident: the checkpoint's mappings (and their parsed headers) go
++        e.store.dropShards();
+         e.ngram = try ple.Ngram.init(gpa, io, e.model_dir);
+         errdefer e.ngram.deinit();
+         e.batch_k = try batch.Kernels.load(driver, expert_tile);
+diff --git a/zig/src/families/flashnext/cuda_prompt_wt.zig b/zig/src/families/flashnext/cuda_prompt_wt.zig
+index 8224c51e..7d0e3d51 100644
+--- a/zig/src/families/flashnext/cuda_prompt_wt.zig
++++ b/zig/src/families/flashnext/cuda_prompt_wt.zig
+@@ -76,6 +76,11 @@ const Shard = struct {
+     }
+ };
+ 
++/// Mapped shards the store keeps: one decoder layer's NVFP4 experts live in more than a dozen
++/// shards of this checkpoint, so a two-entry ring reopened (and re-parsed the header of) a shard
++/// for nearly every tensor it read. One layer's whole set now stays mapped and is parsed once.
++pub const cached_shards: usize = 48;
++
+ pub const Store = struct {
+     gpa: std.mem.Allocator,
+     io: std.Io,
+@@ -84,11 +89,13 @@ pub const Store = struct {
+     path: []u8 = &.{},
+     rel: []u8 = &.{},
+     file: ?Shard = null,
+-    held: [12]Held = undefined,
++    held: [cached_shards]Held = undefined,
+     nheld: usize = 0,
+-    released: [2]Held = undefined,
++    released: [cached_shards]Held = undefined,
+     nreleased: usize = 0,
+     norm_offset: f32 = 0,
++    /// Host threads read experts through one store: mapping bookkeeping is serialized, the copies are not.
++    mtx: std.Io.Mutex = .init,
+ 
+     pub fn open(gpa: std.mem.Allocator, io: std.Io, dir: []const u8) !Store {
+         const index = try std.fs.path.join(gpa, &.{ dir, "model.safetensors.index.json" });
+@@ -137,22 +144,37 @@ pub const Store = struct {
+         self.parsed.deinit();
+     }
+ 
+-    /// Borrowers expire here; two indexed shards cover separate weight and calibration planes.
++    /// Borrowers expire here; every shard a layer touched stays mapped until the ring is full.
+     pub fn release(self: *Store) void {
++        self.mtx.lockUncancelable(self.io);
++        defer self.mtx.unlock(self.io);
++        self.releaseLocked();
++    }
++
++    fn releaseLocked(self: *Store) void {
+         for (self.held[0..self.nheld]) |h| {
+-            if (self.nreleased == self.released.len) {
+-                self.released[0].file.close();
+-                self.gpa.free(self.released[0].rel);
+-                self.released[0] = self.released[1];
+-                self.nreleased -= 1;
+-            }
++            if (self.nreleased == self.released.len) self.closeOldest();
+             self.released[self.nreleased] = h;
+             self.nreleased += 1;
+         }
+         self.nheld = 0;
+     }
+ 
++    fn closeOldest(self: *Store) void {
++        self.released[0].file.close();
++        self.gpa.free(self.released[0].rel);
++        const rest = self.nreleased - 1;
++        std.mem.copyForwards(Held, self.released[0..rest], self.released[1..][0..rest]);
++        self.nreleased = rest;
++    }
++
+     fn closeReleased(self: *Store) void {
++        self.mtx.lockUncancelable(self.io);
++        defer self.mtx.unlock(self.io);
++        self.closeReleasedLocked();
++    }
++
++    fn closeReleasedLocked(self: *Store) void {
+         for (self.released[0..self.nreleased]) |*h| {
+             h.file.close();
+             self.gpa.free(h.rel);
+@@ -160,14 +182,26 @@ pub const Store = struct {
+         self.nreleased = 0;
+     }
+ 
++    /// Drop every mapping the load left behind: the engine reads no checkpoint shard after it.
++    pub fn dropShards(self: *Store) void {
++        self.mtx.lockUncancelable(self.io);
++        defer self.mtx.unlock(self.io);
++        self.releaseLocked();
++        self.closeFileLocked();
++        self.closeReleasedLocked();
++    }
++
+     pub fn hold(self: *Store, requested: []const u8) !Tensor {
++        self.mtx.lockUncancelable(self.io);
++        defer self.mtx.unlock(self.io);
+         var mapped: [512]u8 = undefined;
+         const key = try self.resolveKey(requested, &mapped);
+         const file = try self.shard(key);
+         for (self.held[0..self.nheld]) |*h| {
+             if (std.mem.eql(u8, h.rel, file)) return h.file.get(key) orelse return error.MissingTensor;
+         }
+-        if (self.nheld == self.held.len) return error.UnexpectedTensor;
++        // Every borrower's mapping stays: a full borrow list is swept into the cache, never closed.
++        if (self.nheld == self.held.len) self.releaseLocked();
+         for (self.released[0..self.nreleased], 0..) |cached, i| {
+             if (std.mem.eql(u8, cached.rel, file)) {
+                 self.held[self.nheld] = cached;
+@@ -190,6 +224,12 @@ pub const Store = struct {
+     }
+ 
+     pub fn closeFile(self: *Store) void {
++        self.mtx.lockUncancelable(self.io);
++        defer self.mtx.unlock(self.io);
++        self.closeFileLocked();
++    }
++
++    fn closeFileLocked(self: *Store) void {
+         if (self.file) |*f| f.close();
+         self.file = null;
+         if (self.path.len != 0) self.gpa.free(self.path);
+@@ -227,13 +267,15 @@ pub const Store = struct {
+     fn use(self: *Store, key: []const u8) !void {
+         const file = try self.shard(key);
+         if (self.file != null and std.mem.eql(u8, file, self.rel)) return;
+-        self.closeFile();
++        self.closeFileLocked();
+         self.rel = try self.gpa.dupe(u8, file);
+         self.path = try std.fs.path.join(self.gpa, &.{ self.dir, file });
+         self.file = try Shard.load(self.gpa, self.io, self.path);
+     }
+ 
+     pub fn tensor(self: *Store, requested: []const u8) !Tensor {
++        self.mtx.lockUncancelable(self.io);
++        defer self.mtx.unlock(self.io);
+         var mapped: [512]u8 = undefined;
+         const key = try self.resolveKey(requested, &mapped);
+         try self.use(key);

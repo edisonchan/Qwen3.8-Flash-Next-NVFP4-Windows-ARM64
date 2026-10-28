@@ -1,0 +1,126 @@
+Qwen3.8-Flash-Next NVFP4 on Windows 11 ARM64 -- an unofficial port
+Copyright 2026 edison
+
+Unofficial. This repository is not affiliated with, sponsored by, or endorsed by
+MiaAI-Lab, the TensorFold authors, NVIDIA, or the Qwen team. It is a port of
+someone else's recipe to a platform that recipe does not target.
+
+It contains no model weights and no compiled binaries.
+
+
+1. This repository's own work -- MIT
+------------------------------------
+
+  README.md, README.zh-CN.md, NOTICE, CREDITS.md
+  docs/, references/, scripts/, SKILL.md
+  patches/0002-windows-arm64-port.patch
+  patches/0003-load-pipeline.patch
+
+  Copyright (c) 2026 edison. MIT License, full text in LICENSE.
+
+
+2. The recipe this repository ports -- MiaAI-Lab, MIT
+-----------------------------------------------------
+
+  https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold
+  read at commit fd3f43e
+  Copyright (c) 2026 MiaAI-Lab
+  Full text: LICENSES/MiaAI-Lab-MIT.txt
+
+  patches/0001-recipe-0001-0017-on-v1.1.4.patch reproduces that repository's
+  patches 0001..0017, merged into a single diff against TensorFold v1.1.4
+  (commit eab85828). The changes in those patches are MiaAI-Lab's work, listed
+  one by one in CREDITS.md, and stay under their MIT License. The merge was done
+  only to make them apply to the pinned release as one step; no change of
+  substance was made while merging.
+
+  recipe/start.ps1, recipe/stop.ps1, recipe/config.ps1 and recipe/banner.ps1 are
+  the PowerShell counterparts of that repository's start.sh, stop.sh,
+  scripts/config.sh and scripts/banner.sh: same order of operations, same
+  messages, same .env semantics. The shell originals are Copyright (c) 2026
+  MiaAI-Lab under the MIT License; the PowerShell translation and the two
+  PowerShell 5.1 fixes it carries (empty-body test in the health probe, explicit
+  -Method on every request) are Copyright (c) 2026 edison, also MIT.
+
+
+3. TensorFold -- Apache-2.0 from 0.6.0, MIT before that
+-------------------------------------------------------
+
+  https://github.com/ashhart/TensorFold
+  release v1.1.4, commit eab85828
+  Copyright 2026 TensorFold contributors
+
+  Apache License, Version 2.0:                  LICENSES/Apache-2.0.txt
+  MIT notice for code written before 0.6.0:    LICENSES/TensorFold-MIT.txt
+  TensorFold's NOTICE, kept as Apache-2.0 s4(d) requires:
+                                               LICENSES/TensorFold-NOTICE.txt
+  TensorFold's third-party notices:            LICENSES/TensorFold-THIRD_PARTY_NOTICES.md
+
+  Statement of changes, Apache-2.0 s4(b). The patches below modify TensorFold's
+  source and quote it as diff context. They were made by edison in October 2026,
+  are not part of any TensorFold release, and are not endorsed by TensorFold:
+
+    patches/0002-windows-arm64-port.patch
+      5 files: zig/kernels/cuda/qmm_prefill.cu, prefill_attention.cu,
+      gdn_prefill.cu, zig/src/families/flashnext/cuda_ple_reader.zig and
+      cuda_ple.zig. MSVC compatibility only. In the three .cu files the sole
+      change is adding __restrict__ to the argument lists of explicit template
+      instantiations, so they match the definitions the host compiler sees; not
+      one kernel body, launch dimension or arithmetic expression is touched. The
+      two .zig files change only how Zig 0.17's platform declarations are read
+      (std.posix.MAP and CLOCK are void there).
+
+    patches/0003-load-pipeline.patch
+      4 files. Host-side loader only: zig/src/families/flashnext/cuda_modelopt_experts.zig,
+      cuda_prompt_wt.zig, cuda_prompt.zig and zig/src/core/nvfp4_slice.zig.
+      Staged parallel expert packing, pinned double buffering, a wider shard
+      mapping cache, whole-row copies. Touches no .cu file and no kernel launch
+      configuration.
+
+  The modified TensorFold code stays under TensorFold's licenses (Apache-2.0, and
+  the MIT notice for code written before 0.6.0). This repository distributes the
+  diffs only -- never a modified TensorFold tree, never a built binary. Anyone who
+  applies them and builds gets a TensorFold binary and must ship TensorFold's
+  LICENSE, LICENSES/, NOTICE and THIRD_PARTY_NOTICES.md with it.
+
+
+4. Deliberately not redistributed here
+--------------------------------------
+
+  Model weights. The default checkpoint, nvidia/Qwen3.8-Flash-Next-FP4-Local, is
+  NVIDIA's quantization-aware-distilled FP4 export of Qwen/Qwen3.8-Flash-Next and
+  is used under the NVIDIA Open Model Agreement
+  (https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-agreement/);
+  the base model is under the Qwen Community License 1.0
+  (https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE). You accept
+  those terms when you download the weights; this repository only names the repo
+  and revision to fetch.
+
+  Compiled artifacts. tensorfold-native.exe, tf-cuda-test.exe, *.cubin, *.pdb and
+  build/ are all in .gitignore. A binary built with these patches is a TensorFold
+  binary under TensorFold's licenses (section 3), not under this repository's MIT.
+
+  libtfgrammar.so, xgrammar and dlpack. Structured output is served by TensorFold's
+  own release archive; nothing of it is fetched, modified or redistributed by this
+  repository. Its notices travel with TensorFold (LICENSES/TensorFold-THIRD_PARTY_NOTICES.md).
+
+  The Zig compiler. scripts/5-build.ps1 downloads Zig 0.17.0 at build time and
+  invokes it; the toolchain is not redistributed here. Zig is MIT (Expat),
+  Copyright (c) Zig contributors, https://ziglang.org -- used at build time only.
+
+  The recipe's container image, and the Python packages scripts/4-venv.ps1 installs
+  (transformers, PyAV, Pillow and their dependencies). Nothing of it is redistributed
+  here; the venv is built from public indexes on the machine that runs it.
+
+
+5. Where each change is recorded
+--------------------------------
+
+  patches/0001-recipe-0001-0017-on-v1.1.4.patch   MiaAI-Lab, patches 0001..0017 merged
+  patches/0002-windows-arm64-port.patch           edison, 5 platform fixes on TensorFold
+  patches/0003-load-pipeline.patch                edison, 4 loader files on TensorFold
+  recipe/*.ps1                                    MiaAI-Lab (.sh) + edison (.ps1)
+  scripts/*.ps1, references/*.md, docs/, SKILL.md edison
+  CREDITS.md                                      MiaAI-Lab, reproduced unedited
+
+  See CREDITS.md for everyone this port builds on.
