@@ -1,9 +1,15 @@
 # Qwen3.8-Flash-Next NVFP4 · Windows 11 ARM64
 
 把 [MiaAI-Lab 的配方](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold)移植到 Windows 11
-ARM64（GB10 / `sm_121`）的**非官方**版本。同一个 NVFP4 权重、同一个 [TensorFold](https://github.com/ashhart/TensorFold)
-引擎，**不用 Docker**：用 MSVC 为 ARM64 原生编出 `tensorfold-native.exe`，把配方的 shell 脚本换成 PowerShell，
-并把模型加载从 **257 秒压到 71 秒**。
+ARM64——**NVIDIA RTX Spark**（GB10，128 GB 统一内存，`sm_121`）——的**非官方**版本。同一个 NVFP4 权重、同一个
+[TensorFold](https://github.com/ashhart/TensorFold) 引擎，**不用 Docker**：用 MSVC 为 ARM64 原生编出
+`tensorfold-native.exe`，把配方的 shell 脚本换成 PowerShell，并把模型加载从 **257 秒压到 71 秒**。
+
+> **机型要说清楚。** 上游配方针对的是 **DGX Spark**，那是 NVIDIA 的 Linux（DGX OS）产品。
+> 本项目针对的是**同一块 GB10 Grace Blackwell，跑 Windows 11 ARM64**——在这个组合下它叫 **RTX Spark**
+> （128 GB 统一内存、20 核、48 SMs、`sm_121`）。这里的一切都绑定这个组合：MSVC/ARM64 而非 gcc、
+> PowerShell 而非 bash、WDDM 而非 Linux 驱动、没有容器。配方目录名里仍带 `Single-DGX-Spark`，
+> 那是**上游仓库的名字**，不是本项目运行的机器。
 
 [English](README.md)
 
@@ -175,8 +181,12 @@ modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_di
 
 ## 环境要求
 
-Windows 11 ARM64 · GB10（128 GB 统一内存、20 核）· CUDA 13.4 · Zig 0.17.0（aarch64-windows）·
-MSVC 2022 Build Tools（含 ARM64 host）· PowerShell 5.1 · 仅 `--vision` 需要 Python 3.13 arm64。
+**Windows 11 ARM64** + **NVIDIA RTX Spark**（GB10 Grace Blackwell，128 GB 统一内存，20 核，48 SMs，`sm_121`）·
+CUDA 13.4 · Zig 0.17.0（aarch64-windows）· MSVC 2022 Build Tools（含 ARM64 host）· PowerShell 5.1 ·
+仅 `--vision` 需要 Python 3.13 arm64。
+
+不是 DGX Spark：那是同一块 GB10 模块跑 NVIDIA 的 Linux DGX OS。本仓库在 Linux 上跑不了，配方的 Linux 路径
+（Docker 镜像、bash、`/proc`）恰恰是这次要替换掉的东西。
 
 没有任何路径是写死的：`scripts\migration.config.ps1` 负责找，`.migration.local.json` 记住你确认过的值。
 `1-preflight.ps1` 对 zig ≠ 0.17.0 直接判失败，对 nvcc 不是 13.4 给告警。
@@ -234,8 +244,9 @@ kernel、带精确校验的 MTP 草稿、OpenAI 兼容服务端（v0.6.0 起 Apa
 `pypi.nvidia.com/nvtorch_oot_nightly` 索引。Linux 上这些都由 `nvcr.io/nvidia/pytorch:26.07-py3` 镜像提供，
 Windows 上那个镜像不存在，由 venv 顶上（见上面《Python 与 torch》）。
 
-**硬件。** 这里的每个数字都测于一
-[NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)（GB10 Grace Blackwell，
-128 GB 统一内存，20 核，48 SMs，`sm_121`）。
+**硬件。** 这里的每个数字都测于 **NVIDIA RTX Spark**——GB10 Grace Blackwell 模块（128 GB 统一内存、20 核、
+48 SMs、`sm_121`）跑 **Windows 11 ARM64**。它的 Linux 同门是
+[DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)，上游的数字是在那上面测的；
+芯片一样，OS 与驱动栈不一样。
 
 如果你觉得上面漏了人或写错了，请开 issue。

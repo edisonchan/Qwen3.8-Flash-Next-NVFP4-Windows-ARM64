@@ -160,7 +160,10 @@ This recipe no longer applies those patches (the serving path is the Zig engine)
 ## Hardware
 
 - **[NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)** (GB10 Grace Blackwell,
-  128 GB unified memory): every number in the README was measured on one.
+  128 GB unified memory): every number in MiaAI-Lab's recipe was measured on one, under DGX OS (Linux).
+- The same GB10 module running **Windows 11 ARM64** is sold as **RTX Spark**. That is the machine this port targets:
+  the load-time figures this repository quotes (257 s → 71 s) were measured on it, with the MSVC/ARM64 build and no
+  container. Same silicon as the line above; different OS, driver stack (WDDM) and toolchain.
 
 ## README
 

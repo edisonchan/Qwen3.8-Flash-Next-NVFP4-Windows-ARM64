@@ -6,10 +6,13 @@ agent_created: true
 
 # TensorFold v1.1.4 · Windows ARM64 迁移（可复现配方）
 
-目标：在一台**全新的 Windows 11 ARM64** 上，只靠 `git clone` + 本 skill 的三个补丁，得到可运行的
-`tensorfold-native.exe`，并知道它为什么能编过、为什么加载只要 71 s（原生路径 257 s）。
-所有步骤都在本机（RTX Spark N1X / GB10，sm_121）实测通过，
+目标：在一台**全新的 Windows 11 ARM64**（**NVIDIA RTX Spark**，GB10 / 128 GB 统一内存 / `sm_121`）上，只靠
+`git clone` + 本 skill 的三个补丁，得到可运行的 `tensorfold-native.exe`，并知道它为什么能编过、为什么加载只要
+71 s（原生路径 257 s）。所有步骤都在本机（RTX Spark N1X / GB10，sm_121）实测通过，
 补丁可**逐字节**还原当前生产树（验证记录见 `references/verification.md`）。
+
+> **机型**：§0 速查表里配方仓库名带 `Single-DGX-Spark`，那是**上游仓库名**。上游跑在 **DGX Spark（Linux / DGX OS）**；
+> 本 skill 只面向**同一块 GB10 跑 Windows 11 ARM64**，即 **RTX Spark**。Linux 上不需要这套流程，也不要照搬。
 
 ---
 
@@ -91,8 +94,9 @@ powershell -ExecutionPolicy Bypass -File scripts\Invoke-Migration.ps1
 
 | 项 | 要求 | 本机实测 |
 |---|---|---|
+| 机型 | **NVIDIA RTX Spark**（GB10 Grace Blackwell，128 GB 统一内存，20 核）跑 Windows 11 ARM64。**不是 DGX Spark**——那是同一块 GB10 上的 Linux 产品 | RTX Spark N1X |
 | CPU/OS | Windows 11 ARM64（`Win32_Processor.Architecture = 12`，见第 9 章 #8） | ✅ |
-| GPU | NVIDIA，计算能力 12.1（GB10 / RTX Spark N1X） | RTX Spark N1X，48 SMs |
+| GPU | NVIDIA，计算能力 12.1（GB10，48 SMs） | RTX Spark N1X，48 SMs |
 | 显存/统一内存 | 权重 81 GiB（NVFP4）+ 每流 KV ~4.7 GiB | GPU pool 98 GiB，系统可见 ~30 GiB |
 | 磁盘 | 源码+缓存 ≥ 25 GiB；**模型另需 96 GiB** | D: 1.5 TB |
 
