@@ -58,21 +58,30 @@ git -C D:\llm\latest\TensorFold rev-parse HEAD         # eab8582819688325e371907
 D:\llm\latest\TensorFold\build\native\bin\tensorfold-native.exe --version   # tensorfold-native 1.1.4
 D:\llm\latest\TensorFold\build\native\bin\tensorfold-native.exe capabilities --json
 #    -> "version":"1.1.4"  "chip":"nvidia-sm121"  "backends":["cuda"]
+#       and families.qwen4_exp = ["mlx-q4g32","modelopt-mixed"]  = pin 3's format
 
 # 2) recipe
 git -C D:\llm\latest\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold rev-parse HEAD   # fd3f43e112385...
-ls  D:\llm\latest\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold\patches\*.patch | Measure-Object   # Count 17
+(Get-ChildItem D:\llm\latest\Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold\patches\*.patch).Count   # 17
 
 # 3) toolchain
 D:\llm\zig-aarch64-windows-0.17.0\zig.exe version      # 0.17.0
 nvcc --version                                         # release 13.4, V13.4.92
-& "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" arm64 > $null
-cl 2>&1 | Select-Object -First 1                       # 适用于 ARM64 的 Microsoft (R) C/C++ 优化编译器 19.44.x
+# MSVC: the arm64 cross compiler's file version (cl needs vcvars, the file does not)
+$cl = Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC" -Directory |
+      Sort-Object Name -Descending | Select-Object -First 1
+$cl.Name                                                             # 14.44.35207
+(Get-Item "$($cl.FullName)\bin\Hostarm64\arm64\cl.exe").VersionInfo.FileVersion   # 19.44.35229.0
 
 # 4) patches: the bytes, not the names
 Get-FileHash .\patches\*.patch -Algorithm SHA256 | Format-Table Hash, Path
-#    -> c780c961… / 9e2728ad… / 911b7d75…
+#    -> C780C961… / 9E2728AD… / 911B7D75…   (Get-FileHash prints upper case; 12 hex chars are enough)
 ```
+
+The `families` line in step 1 is the cheapest way to check pin 3 before loading anything: the checkpoint's
+`model_type: qwen4_exp` plus `quant_algo: MIXED_PRECISION` has to map to a format this binary lists, and
+`modelopt-mixed` is that format. If a future checkpoint names a family or format that is not in this JSON,
+the load fails with `UnsupportedCheckpoint` after reading all 48 layers.
 
 `D:\llm\latest` and the zig path are the defaults the scripts use; pass `-Root` / `-Zig` if yours differ.
 
