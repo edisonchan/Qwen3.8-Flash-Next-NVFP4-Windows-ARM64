@@ -80,8 +80,9 @@ foreach ($m in $map) {
 
 # ---- .env: tell the recipe where the checkpoint is ------------------------
 $envFile = Join-Path $Recipe '.env'
-if ($NoEnv) {
-    Write-Host '  (.env left alone: -NoEnv)' -ForegroundColor DarkGray
+if ($NoEnv -or $ModelPath -eq 'none') {
+    $why = if ($NoEnv) { '-NoEnv' } else { '-ModelPath none' }
+    Write-Host "  (.env left alone: $why)" -ForegroundColor DarkGray
 } elseif (-not $ModelPath) {
     Write-Host '  (.env left alone: no checkpoint path known; set MODEL_PATH there when you have the weights)' -ForegroundColor DarkGray
 } else {
