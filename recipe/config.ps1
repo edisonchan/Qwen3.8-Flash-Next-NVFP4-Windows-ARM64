@@ -39,6 +39,10 @@ if (Test-Path $envFile) {
 
 # ---- checkpoint presets (local model directories; MODEL_PATH overrides) ----
 # WEIGHTS_GIB is what loading takes of memory (measured on the Zig engine, config.sh).
+# The nvfp4 weights are not shipped: nvidia/Qwen3.8-Flash-Next-FP4-Local on Hugging Face (revision b9ce18a6),
+# mirrored at https://www.modelscope.cn/models/nv-community/Qwen3.8-Flash-Next-FP4-Local. From either host,
+# check config.json says quant_method=modelopt and quant_algo=MIXED_PRECISION -- a GPTQ re-upload (the int4
+# preset below) is refused at load with UnsupportedCheckpoint.
 $CHECKPOINT = Get-Setting 'CHECKPOINT' 'nvfp4'
 switch ($CHECKPOINT) {
     'nvfp4' {

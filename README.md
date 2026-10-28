@@ -65,9 +65,24 @@ Add-Content "$Q\.env" @('TENSORFOLD_LOAD_STATS=1', 'PARALLEL=4')
 & "$Q\stop.ps1"
 ```
 
-The model weights are **not** in this repository. `recipe/config.ps1` names the checkpoint
-(`nvidia/Qwen3.8-Flash-Next-FP4-Local` at revision `b9ce18a6…`); you accept NVIDIA's Open Model Agreement
-and the Qwen Community License when you download it.
+### Weights
+
+Not in this repository. Either host serves the same export, ~96 GiB of it:
+
+```powershell
+# Hugging Face
+hf download nvidia/Qwen3.8-Flash-Next-FP4-Local --revision b9ce18a6887e18c089fdea8509a33e63429a3300 --local-dir D:\llm\model\Qwen3.8-Flash-Next-FP4-Local
+
+# ModelScope mirror (faster from the mainland; needs pip install modelscope)
+modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_dir D:\llm\model\Qwen3.8-Flash-Next-FP4-Local
+```
+
+`recipe/config.ps1` defaults `MODEL_PATH` to that directory; set `MODEL_PATH` in `.env` to point elsewhere.
+
+A mirror is a different host, not a different model — so check the download is the export this engine takes:
+`config.json` must carry `quant_method: modelopt` and `quant_algo: MIXED_PRECISION`. A GPTQ re-upload loads with
+`UnsupportedCheckpoint`. The terms travel with the weights from either host: NVIDIA's Open Model Agreement for the
+FP4 export, the Qwen Community License 1.0 for the base model.
 
 ## Model load: 257 s → 71 s
 

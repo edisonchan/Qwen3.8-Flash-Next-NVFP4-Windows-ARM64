@@ -56,8 +56,24 @@ Add-Content "$Q\.env" @('TENSORFOLD_LOAD_STATS=1', 'PARALLEL=4')
 & "$Q\stop.ps1"
 ```
 
-权重**不在**本仓库。`recipe/config.ps1` 里写明用哪个 checkpoint（`nvidia/Qwen3.8-Flash-Next-FP4-Local`，
-revision `b9ce18a6…`）；下载即表示你接受 NVIDIA Open Model Agreement 与 Qwen Community License。
+### 权重
+
+不在本仓库。两个源是同一份导出，占盘约 96 GiB：
+
+```powershell
+# Hugging Face
+hf download nvidia/Qwen3.8-Flash-Next-FP4-Local --revision b9ce18a6887e18c089fdea8509a33e63429a3300 --local-dir D:\llm\model\Qwen3.8-Flash-Next-FP4-Local
+
+# ModelScope 镜像（国内通常更快；需先 pip install modelscope）
+modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_dir D:\llm\model\Qwen3.8-Flash-Next-FP4-Local
+```
+
+`recipe/config.ps1` 的 `MODEL_PATH` 默认就是这个目录；换目录在 `.env` 里改 `MODEL_PATH`。
+
+镜像只是换了托管方，不是换了模型——所以下完先确认是这台引擎能吃的那份导出：`config.json` 里必须是
+`quant_method: modelopt`、`quant_algo: MIXED_PRECISION`。GPTQ 的二次上传会在加载时报
+`UnsupportedCheckpoint`。无论从哪个源下载，许可条款都跟着权重走：FP4 导出适用 NVIDIA Open Model Agreement，
+底座模型适用 Qwen Community License 1.0。
 
 ## 加载：257 秒 → 71 秒
 

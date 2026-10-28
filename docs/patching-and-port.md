@@ -474,7 +474,7 @@ Windows 上没有容器这一层，"准备"退化成几件独立的事，也就�
 | `git clone` + 打 17 个补丁 | `2-clone.ps1` + `3-apply-patches.ps1`（三份合并补丁） |
 | 编 CUDA / zig | `5-build.ps1`（`cmd /c` + `vcvarsall arm64` 内跑 `zig build`） |
 | 装 libjpeg-turbo / libwebp | 不需要：exe 旁边已有 `turbojpeg.dll` / `libwebpdecoder.so.3` |
-| 下权重（HF snapshot） | `hf download ... --local-dir D:\llm\model\...` |
+| 下权重（HF snapshot） | `hf download nvidia/Qwen3.8-Flash-Next-FP4-Local --revision b9ce18a6… --local-dir D:\llm\model\...`；国内可用 ModelScope 镜像 `modelscope download --model nv-community/Qwen3.8-Flash-Next-FP4-Local --local_dir D:\llm\model\...` |
 | 镜像标签当"过期判据" | 没有镜像了 → 由 `3-apply-patches.ps1` 的 78 项与 exe 时间戳替代 |
 
 ---

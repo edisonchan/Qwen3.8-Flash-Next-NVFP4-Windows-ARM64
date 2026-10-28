@@ -102,7 +102,9 @@ It contains no model weights and no compiled binaries.
   the base model is under the Qwen Community License 1.0
   (https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE). You accept
   those terms when you download the weights; this repository only names the repo
-  and revision to fetch.
+  and revision to fetch. The same export is mirrored at
+  https://www.modelscope.cn/models/nv-community/Qwen3.8-Flash-Next-FP4-Local --
+  a mirror changes who serves the bytes, not which terms apply to them.
 
   Compiled artifacts. tensorfold-native.exe, tf-cuda-test.exe, *.cubin, *.pdb and
   build/ are all in .gitignore. A binary built with these patches is a TensorFold
