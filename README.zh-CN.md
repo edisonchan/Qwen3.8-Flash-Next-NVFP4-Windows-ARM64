@@ -101,7 +101,7 @@ MSVC 2022 Build Tools（含 ARM64 host）· PowerShell 5.1 · 仅 `--vision` 需
 ## 许可
 
 本仓库自己的代码 MIT；补丁所修改的 TensorFold 代码是 Apache-2.0（0.6.0 之前的代码另有 MIT 声明）；
-被移植的配方补丁是 MiaAI-Lab 的 MIT。哪个文件归哪条，`NOTICE` 里写清楚了，全文都在 `LICENSES/`。
-不含权重、不含二进制——不会误授权。
+被移植的配方补丁是 MiaAI-Lab 的 MIT。`LICENSE` 是纯 MIT 正文、两个版权人都在里面（这样 GitHub 能识别为 MIT）；
+哪个文件归哪条，`NOTICE` 里写清楚了，全文都在 `LICENSES/`。不含权重、不含二进制——不会误授权。
 
 与 MiaAI-Lab、TensorFold 作者、NVIDIA、通义千问团队**无隶属关系**，也未经其背书。

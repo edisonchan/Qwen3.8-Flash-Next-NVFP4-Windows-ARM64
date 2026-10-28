@@ -112,7 +112,8 @@ MSVC 2022 Build Tools with the ARM64 host · PowerShell 5.1 · Python 3.13 arm64
 ## License
 
 MIT for this repository's own work, Apache-2.0 (plus pre-0.6.0 MIT) for the TensorFold code the patches
-modify, MIT for the recipe patches this ports. `NOTICE` spells out which file falls under which, and
-`LICENSES/` carries every full text. No weights, no binaries, nothing to relicense by accident.
+modify, MIT for the recipe patches this ports. `LICENSE` is the plain MIT text, with both copyright holders in
+it so GitHub detects it as MIT; `NOTICE` says which files each holder covers, and `LICENSES/` carries every
+full text. No weights, no binaries, nothing to relicense by accident.
 
 Not affiliated with, sponsored by, or endorsed by MiaAI-Lab, the TensorFold authors, NVIDIA or the Qwen team.

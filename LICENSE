@@ -1,14 +1,7 @@
 MIT License
 
 Copyright (c) 2026 MiaAI-Lab
-  for the Qwen3.8-Flash-Next recipe this repository ports
-  https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold
-  (reproduced as patches/0001-recipe-0001-0017-on-v1.1.4.patch and as the basis of recipe/*.ps1)
-
 Copyright (c) 2026 edisonchan
-  for the Windows 11 ARM64 port: patches/0002-windows-arm64-port.patch,
-  patches/0003-load-pipeline.patch, recipe/*.ps1 (PowerShell translation and fixes),
-  scripts/, references/, docs/, SKILL.md, README.md and this NOTICE
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -27,10 +20,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-The MIT License above covers this repository's own work. It does not cover the
-TensorFold code that patches/0002 and patches/0003 modify, nor the TensorFold
-code quoted as diff context in patches/0001: that code stays under TensorFold's
-own licenses (Apache-2.0 from 0.6.0; MIT before that). See NOTICE and LICENSES/.
