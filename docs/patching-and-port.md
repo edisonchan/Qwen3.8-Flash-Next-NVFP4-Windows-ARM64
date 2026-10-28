@@ -569,8 +569,24 @@ Linux 那套"环境优先、`.env` 只补空缺"的语义会让旧默认值反�
 取值不同，文件头的注释写了每一组数字和理由。配方 README 里那些 +14% / 15–25% 是它自己 Linux 镜像
 上的数字，不能当作 Windows 上的预期。
 
-prefill 一侧仍在扫（目标：32k / 32,807 prompt tokens 上 2,735 tok/s），`PROMPT_*`、`PREFILL_TAIL`、
-`WARM_AHEAD` 暂时保留配方值，等那轮结果出来再定。
+prefill 一侧同一天扫完（`sweep-prefill.ps1` → `prefill-32k.txt`），结论同向：目标 2,735 tok/s
+（32k / 32,807 prompt tokens），实测 **2,291**（−16%）；prompt 侧开关全关只有 1,706，而 `GATHER_READ=pread`
+一开就掉到 **663**（2.6 倍损失），配方整套是 731——所以"配方全开"在 prefill 上和 decode 上一样是负收益。
+
+| prefill 组（32k，3 遍取最快） | tok/s |
+|---|---|
+| `PROMPT_EXPERT_TILE=2` + `_ROWS=256`（单开） | 2,032 |
+| `PROMPT_HC2` + `SHARED_DIRECT` + `HEAD_PIECE=1536` + `GEMM2`（一组） | 1,874 |
+| 两者合并（现在 `config.ps1` 的值） | **2,291** |
+| 全关 | 1,706 |
+| `WARM_AHEAD=1` / `PREFILL_TAIL=512` 单开 | 1,703 / 1,705（等于噪声） |
+| `GATHER_READ=pread` 单开 | 663 |
+| 配方整套 | 731 |
+
+两组效果**可叠加**且各自显著，`WARM_AHEAD` 与 `PREFILL_TAIL` 在 32k 上不起作用，于是默认值取 0
+（等于引擎出厂值）。剩余 16% 的差距已不在这批开关里，下一批候选是 `TF_FLASHNEXT_CHUNK`（默认
+3072 行/次，上限 16384，但 scratch 多约 13 GiB）、`PROMPT_MX128`（默认 1024）、`PRODUCT_STREAMS`
+（配方 5、引擎默认 2，本机从未测过）。
 
 **验收办法**（新机器上必做一次）：
 

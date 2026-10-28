@@ -677,7 +677,11 @@ info: flashnext: layer 47 took 1170 ms
     结论：14% 的损失几乎全来自 `GATHER_READ=pread`（Windows 上是每行一次 `ReadFile`+`OVERLAPPED`，
     不是 Linux 的映射页错误），只有 `KEEP_LATE`+`GDN_LANES` 站得住。所以 `config.ps1` 的**导出清单**
     照 `config.sh` 补齐，**取值用本机实测的最优组合**——两者不是一回事，抄清单不等于抄取值。
-    prefill 一侧（`PROMPT_*`、`PREFILL_TAIL`、`WARM_AHEAD`）另有一轮扫描，目标 32k 上 2,735 tok/s。
+    prefill 一侧同一天也扫完了（32k，目标 2,735 tok/s）：两组 prompt 开关可叠加，`PROMPT_EXPERT_TILE=2`
+    + `_ROWS=256` 单开 2,032、`PROMPT_HC2`+`SHARED_DIRECT`+`HEAD_PIECE=1536`+`GEMM2` 一组 1,874，
+    合并 **2,291**，全关 1,706；而 `GATHER_READ=pread` 单开只有 **663**（2.6 倍损失，配方整套 731）。
+    `WARM_AHEAD` 与 `PREFILL_TAIL` 在 32k 上是噪声，默认取 0。剩下 16% 的候选在
+    `TF_FLASHNEXT_CHUNK`（3072 行/次，上限 16384、多 13 GiB scratch）、`PROMPT_MX128`、`PRODUCT_STREAMS`。
     顺带一提：`TF_FLASHNEXT_DEPTH` **不是**引擎变量（引擎只有 `TF_FLASHNEXT_DEPTH_LOG`），
     真正控制 draft 长度的是 `TF_FLASHNEXT_DRAFTS`——写了错的变量名不会有任何报错，只会静默不生效。
 

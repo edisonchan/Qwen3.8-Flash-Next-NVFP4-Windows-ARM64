@@ -102,8 +102,9 @@ $Foreground  = ((Get-Setting 'FOREGROUND' '0') -eq '1')
 # down with it. Two switches do survive: KEEP_LATE and GDN_LANES (91.8 together, the best of the
 # nine combinations tried). So what ships here is the fastest set for WDDM, not the recipe's set.
 # config.sh's own figures (+14% greedy code at one stream, 15-25% a prompt call) are its Linux
-# image's and do not transfer. Still at config.sh's value and still unmeasured here: the prefill
-# switches (a prefill sweep follows) and PRODUCT_STREAMS.
+# image's and do not transfer. The prompt path was swept the same day (prefill-32k.txt): 2,291
+# tok/s at 32k with the set below, 1,706 with every prompt switch off, 663 with pread on. Still
+# unmeasured here: PRODUCT_STREAMS (5, config.sh's value; the engine's stock is 2).
 $Yarn = [int](Get-Setting 'TF_FLASHNEXT_YARN' $(if ($Context -gt 262144) { 4 } else { 0 }))
 Set-EnvVar 'TF_FLASHNEXT_YARN' $Yarn
 # MTP: up to 6 drafts a round (also the engine default; spelled out because config.sh does).
@@ -126,19 +127,26 @@ Set-EnvVar 'TF_FLASHNEXT_KEEP_LATE' (Get-Setting 'TF_FLASHNEXT_KEEP_LATE' 1)
 # value stays a value, not a flag: only the literal 'pread' turns it on, so '0' is safely off.
 Set-EnvVar 'TF_FLASHNEXT_GATHER_READ' (Get-Setting 'TF_FLASHNEXT_GATHER_READ' '0')
 Set-EnvVar 'TF_FLASHNEXT_DRAFT_AHEAD' (Get-Setting 'TF_FLASHNEXT_DRAFT_AHEAD' 0)
-# Prompt-side switches below: still config.sh's values, pending a prefill sweep against the
-# recipe's 2,735 tok/s at 32k. WARM_AHEAD and PREFILL_TAIL only run in prompt passes.
-Set-EnvVar 'TF_FLASHNEXT_WARM_AHEAD' (Get-Setting 'TF_FLASHNEXT_WARM_AHEAD' 1)
-Set-EnvVar 'TF_FLASHNEXT_PREFILL_TAIL' (Get-Setting 'TF_FLASHNEXT_PREFILL_TAIL' 512)
-# Prompt passes (0014): fused hyper-connection/GEMM, straight-to-y shared expert, routed
-# experts on shared-memory row tiles from 256 rows, MTP head in 1536-row pieces.
+# Prompt-side switches. Swept 2026-10-28 at 32k against the recipe's 2,735 tok/s (cold prompt,
+# one request, sparkDash; sweep-prefill.ps1 -> prefill-32k.txt): what ships here is 2,291 tok/s,
+# 16% under the page and 34% over every prompt switch off (1,706). GATHER_READ=pread is the one
+# that must stay off -- 663 tok/s at 32k, 2.6x slower, which is also why config.sh's whole set
+# measures 731. WARM_AHEAD and PREFILL_TAIL are here at 0 because that is what measured: 1 and 512
+# gave 1,702 and 1,705 against a 1,706 baseline, i.e. nothing either way at this size.
+Set-EnvVar 'TF_FLASHNEXT_WARM_AHEAD' (Get-Setting 'TF_FLASHNEXT_WARM_AHEAD' 0)
+Set-EnvVar 'TF_FLASHNEXT_PREFILL_TAIL' (Get-Setting 'TF_FLASHNEXT_PREFILL_TAIL' 0)
+# Prompt passes (0014): fused hyper-connection/GEMM, straight-to-y shared expert, MTP head in
+# 1536-row pieces. 1,874 tok/s as a group (1,706 off), and it stacks with the expert tile below.
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_HC2' (Get-Setting 'TF_FLASHNEXT_PROMPT_HC2' 1)
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_SHARED_DIRECT' (Get-Setting 'TF_FLASHNEXT_PROMPT_SHARED_DIRECT' 1)
-Set-EnvVar 'TF_FLASHNEXT_PROMPT_EXPERT_TILE_ROWS' (Get-Setting 'TF_FLASHNEXT_PROMPT_EXPERT_TILE_ROWS' 256)
 Set-EnvVar 'TF_FLASHNEXT_HEAD_PIECE' (Get-Setting 'TF_FLASHNEXT_HEAD_PIECE' 1536)
 # The two-stage MX128 prompt tile (0015).
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_GEMM2' (Get-Setting 'TF_FLASHNEXT_PROMPT_GEMM2' 1)
+# Routed experts on shared-memory row tiles from 256 rows (PROMPT_EXPERT_TILE: 0 off, 1 gate/up,
+# 2 both; giving it a value explicitly also lets it run at any rank count). 2,032 tok/s on its
+# own, the single biggest prompt win here.
 Set-EnvVar 'TF_FLASHNEXT_PROMPT_EXPERT_TILE' (Get-Setting 'TF_FLASHNEXT_PROMPT_EXPERT_TILE' 2)
+Set-EnvVar 'TF_FLASHNEXT_PROMPT_EXPERT_TILE_ROWS' (Get-Setting 'TF_FLASHNEXT_PROMPT_EXPERT_TILE_ROWS' 256)
 # Decode rounds (0016): DeltaNet rows in three launches a layer instead of five a lane. GDN_LANES
 # needs KEEP_LATE=1. The side stream for the shared expert is off: 89.4 tok/s, 1.0% under baseline.
 Set-EnvVar 'TF_FLASHNEXT_SHARED_SIDE' (Get-Setting 'TF_FLASHNEXT_SHARED_SIDE' 0)
