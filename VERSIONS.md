@@ -27,9 +27,9 @@ The three patches are the artifact whose bytes matter, so they carry hashes rath
 
 | Patch | Cut against | Files | `+`/`−` | sha256 |
 |---|---|---|---|---|
-| `0001-recipe-0001-0017-on-v1.1.4.patch` | `eab85828` bare release | 74 | +7155 / −226 | `c780c9610f8550407e61ec48797e8c85d5602d984818dbd555300a61ecca80ad` |
-| `0002-windows-arm64-port.patch` | after `0001` | 5 | +39 / −26 | `9e2728adb391d6610293224d75f53ab8f21b6b7b9fb689b5b943f85229d20a40` |
-| `0003-load-pipeline.patch` | after `0001` + `0002` | 4 | +277 / −39 | `911b7d75a0b0f30b7db502255b3f1f5be6263ed7160f9557534c398e48ec5d64` |
+| `0001-recipe-0001-0017-on-v1.1.4.patch` | `eab85828` bare release | 74 | +7081 / −152 | `c780c9610f8550407e61ec48797e8c85d5602d984818dbd555300a61ecca80ad` |
+| `0002-windows-arm64-port.patch` | after `0001` | 5 | +34 / −21 | `9e2728adb391d6610293224d75f53ab8f21b6b7b9fb689b5b943f85229d20a40` |
+| `0003-load-pipeline.patch` | after `0001` + `0002` | 4 | +273 / −35 | `911b7d75a0b0f30b7db502255b3f1f5be6263ed7160f9557534c398e48ec5d64` |
 
 Order is fixed (`3-apply-patches.ps1` applies them by name). `0001` and `0003` both touch
 `zig/src/families/flashnext/cuda_prompt.zig` and `cuda_prompt_wt.zig`, so `0003` cannot be applied to a

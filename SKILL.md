@@ -191,9 +191,11 @@ echo $LASTEXITCODE   # 0 = 通过
 
 | 文件（`patches\`） | 内容 | 规模 | sha256 |
 |---|---|---|---|
-| `0001-recipe-0001-0017-on-v1.1.4.patch` | 配方 `patches/0001..0017` 的**合并结果**，平铺到 `eab85828` | 74 文件 / 9380 行 | `c780c9610f8550407e61ec48797e8c85d5602d984818dbd555300a61ecca80ad` |
-| `0002-windows-arm64-port.patch` | Windows/MSVC 兼容修复（**不碰 kernel 算术**） | 5 文件 / 158 行 | `9e2728adb391d6610293224d75f53ab8f21b6b7b9fb689b5b943f85229d20a40` |
-| `0003-load-pipeline.patch` | 模型加载流水线：分组并行装配 + pinned 双缓冲异步拷贝 + 分片映射缓存 + 整块 memcpy（**全在 host 侧，不碰 .cu / kernel 启动参数**；原理与取舍见第 8 章） | 4 文件 / 441 行 | `911b7d75a0b0f30b7db502255b3f1f5be6263ed7160f9557534c398e48ec5d64` |
+| `0001-recipe-0001-0017-on-v1.1.4.patch` | 配方 `patches/0001..0017` 的**合并结果**，平铺到 `eab85828` | 74 文件 / +7081 −152 | `c780c9610f8550407e61ec48797e8c85d5602d984818dbd555300a61ecca80ad` |
+| `0002-windows-arm64-port.patch` | Windows/MSVC 兼容修复（**不碰 kernel 算术**） | 5 文件 / +34 −21 | `9e2728adb391d6610293224d75f53ab8f21b6b7b9fb689b5b943f85229d20a40` |
+| `0003-load-pipeline.patch` | 模型加载流水线：分组并行装配 + pinned 双缓冲异步拷贝 + 分片映射缓存 + 整块 memcpy（**全在 host 侧，不碰 .cu / kernel 启动参数**；原理与取舍见第 8 章） | 4 文件 / +273 −35 | `911b7d75a0b0f30b7db502255b3f1f5be6263ed7160f9557534c398e48ec5d64` |
+
+三份补丁与 74/5/4 的切分基线、以及引擎/配方/权重/工具链的钉死值，唯一权威表在 `VERSIONS.md`。
 
 三份合起来影响 **78 个文件**（59 个修改 + 19 个新增）。**顺序不可打乱**：`0003` 是在"`0001`+`0002` 已应用"的
 树上切出来的，其中两个文件（`cuda_prompt.zig`、`cuda_prompt_wt.zig`）在 `0001` 里已经改过。
